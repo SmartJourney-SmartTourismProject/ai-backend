@@ -20,16 +20,18 @@ class TripState(BaseModel):
     travel_style: Optional[str] = None
 
     # Retrieved data
-    attractions: List[dict] = Field(default_factory=list)
-    hotels: List[dict] = Field(default_factory=list)
-    restaurants: List[dict] = Field(default_factory=list)
-    events: List[dict] = Field(default_factory=list)
+    candidate_attractions: List[dict] = Field(default_factory=list)
+    candidate_hotels: List[dict] = Field(default_factory=list)
+    candidate_restaurants: List[dict] = Field(default_factory=list)
+    candidate_events: List[dict] = Field(default_factory=list)
 
     # External context
     weather: Optional[dict] = None
 
     # AI outputs
-    recommendations: List[dict] = Field(default_factory=list)
+    attractions: List[dict] = Field(default_factory=list)
+    hotels: List[dict] = Field(default_factory=list)
+    restaurants: List[dict] = Field(default_factory=list)
     itinerary: List[dict] = Field(default_factory=list)
 
     estimated_cost: Optional[float] = None
@@ -39,3 +41,6 @@ class TripState(BaseModel):
 
     # Errors
     errors: List[str] = Field(default_factory=list)
+
+    # Which agents/steps have run — useful for debugging once the graph has multiple nodes
+    completed_steps: List[str] = Field(default_factory=list)
