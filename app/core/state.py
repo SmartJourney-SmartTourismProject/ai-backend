@@ -27,6 +27,9 @@ class TripState(BaseModel):
 
     # External context
     weather: Optional[dict] = None
+    # Missing Phase 1 fields
+    disaster: dict | None = None
+    events: list[dict] | None = None
 
     # AI outputs
     recommendations: List[dict] = Field(default_factory=list)
