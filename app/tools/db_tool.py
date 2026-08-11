@@ -1,94 +1,114 @@
-from __future__ import annotations
+from typing import List, Optional
 
-from typing import Any, Dict, List, Optional
+# Placeholder data — swap these function bodies for Supabase calls later.
+# Keep the function signatures the same so nothing else in the codebase changes.
 
+_MOCK_LISTINGS = {
+    "kandy": {
+        "hotel": [
+            {
+                "id": "h1-kandy-hilltop", "name": "Hilltop Kandy Residency",
+                "description": "Lake-view hotel near the Temple of the Tooth",
+                "price_range": "$$", "lat": 7.2936, "lon": 80.6414,
+                "rating": 4.3, "photo_url": "", "opening_hours": "24 hours",
+                "has_public_transit": True, "nearest_transit_stop": "Kandy Railway Station",
+                "pickme_available": True,
+            },
+            {
+                "id": "h2-kandy-riverside", "name": "Riverside Kandy Inn",
+                "description": "Budget-friendly, riverside",
+                "price_range": "$", "lat": 7.2906, "lon": 80.6337,
+                "rating": 3.9, "photo_url": "", "opening_hours": "24 hours",
+                "has_public_transit": False, "nearest_transit_stop": None,
+                "pickme_available": True,
+            },
+        ],
+        "restaurant": [
+            {
+                "id": "r1-kandy-empire", "name": "The Empire Cafe",
+                "description": "Local Sri Lankan cuisine, popular with tourists",
+                "price_range": "$", "lat": 7.2921, "lon": 80.6350,
+                "rating": 4.1, "photo_url": "", "opening_hours": "08:00-21:00",
+                "has_public_transit": True, "nearest_transit_stop": "Kandy Bus Stand",
+                "pickme_available": True,
+            },
+        ],
+        "attraction": [
+            {
+                "id": "a1-kandy-temple", "name": "Temple of the Sacred Tooth Relic",
+                "description": "Iconic Buddhist temple",
+                "price_range": "$", "lat": 7.2936, "lon": 80.6413,
+                "rating": 4.7, "photo_url": "", "opening_hours": "05:30-20:00",
+                "has_public_transit": True, "nearest_transit_stop": "Kandy Bus Stand",
+                "pickme_available": True,
+            },
+            {
+                "id": "a2-kandy-gardens", "name": "Royal Botanical Gardens",
+                "description": "Large botanical garden, good for families",
+                "price_range": "$", "lat": 7.2716, "lon": 80.5977,
+                "rating": 4.6, "photo_url": "", "opening_hours": "07:30-17:00",
+                "has_public_transit": False, "nearest_transit_stop": None,
+                "pickme_available": True,
+            },
+        ],
+    }
+}
 
-async def get_hotels(destination: str, interests: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    # Hardcoded sample hotels for the mock
-    return [
+_MOCK_EVENTS = {
+    "kandy": [
         {
-            "id": "hotel-1",
-            "name": "Hilltop Hotel",
-            "description": "Comfortable hotel with scenic views",
-            "price_range": "$$",
-            "lat": 7.2906,
-            "lon": 80.6337,
-            "rating": 4.2,
-            "photo_url": "https://example.com/hilltop.jpg",
-            "opening_hours": "24/7",
-            "has_public_transit": True,
-            "nearest_transit_stop": "Central Bus Station",
-            "pickme_available": True,
-        }
+            "id": "e1-kandy-perahera", "name": "Kandy Esala Perahera",
+            "description": "Grand annual Buddhist festival with processions",
+            "start_datetime": "2026-08-20T19:00:00", "end_datetime": "2026-08-20T22:00:00",
+            "venue_name": "Temple of the Sacred Tooth Relic", "price_info": {"free": True},
+        },
     ]
+}
+
+_MOCK_USER_PROFILES = {
+    "demo-user-1": {
+        "interests": ["culture", "food"],
+        "travel_style": "budget",
+        "budget": 300.0,
+        "home_location": {"lat": 6.9271, "lon": 79.8612},  # Colombo
+    }
+}
 
 
-async def get_restaurants(destination: str, interests: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    return [
-        {
-            "id": "rest-1",
-            "name": "Spice Garden",
-            "description": "Local cuisine",
-            "price_range": "$",
-            "lat": 7.2910,
-            "lon": 80.6340,
-            "rating": 4.5,
-            "photo_url": "https://example.com/spice.jpg",
-            "opening_hours": "10:00-22:00",
-            "has_public_transit": True,
-            "nearest_transit_stop": "Market Stop",
-            "pickme_available": True,
-        }
-    ]
+async def get_hotels(destination: str, interests: Optional[List[str]] = None) -> List[dict]:
+    return _MOCK_LISTINGS.get(destination.lower(), {}).get("hotel", [])
 
 
-async def get_attractions(destination: str, interests: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    return [
-        {
-            "id": "attr-1",
-            "name": "Old Temple",
-            "description": "Historic site",
-            "price_range": "$",
-            "lat": 7.2920,
-            "lon": 80.6350,
-            "rating": 4.7,
-            "photo_url": "https://example.com/temple.jpg",
-            "opening_hours": "06:00-18:00",
-            "has_public_transit": False,
-            "nearest_transit_stop": "Temple Gate",
-            "pickme_available": False,
-        }
-    ]
+async def get_restaurants(destination: str, interests: Optional[List[str]] = None) -> List[dict]:
+    return _MOCK_LISTINGS.get(destination.lower(), {}).get("restaurant", [])
 
 
-async def get_events(destination: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
-    return [
-        {
-            "id": "event-1",
-            "name": "Cultural Show",
-            "description": "Local dance and music",
-            "start_datetime": start_date + "T19:00:00",
-            "end_datetime": start_date + "T21:00:00",
-            "venue_name": "Town Hall",
-            "price_info": {"currency": "LKR", "min": 500, "max": 1500},
-        }
-    ]
+async def get_attractions(destination: str, interests: Optional[List[str]] = None) -> List[dict]:
+    return _MOCK_LISTINGS.get(destination.lower(), {}).get("attraction", [])
 
 
-async def get_transit_info(listing_id: str) -> Dict[str, Any]:
-    return {"listing_id": listing_id, "next_bus_minutes": 12, "routes": ["A1", "B2"]}
+async def get_events(destination: str, start_date: str, end_date: str) -> List[dict]:
+    return _MOCK_EVENTS.get(destination.lower(), [])
+
+
+async def get_transit_info(listing_id: str) -> dict:
+    for category in _MOCK_LISTINGS.values():
+        for listings in category.values():
+            for listing in listings:
+                if listing["id"] == listing_id:
+                    return {
+                        "has_public_transit": listing["has_public_transit"],
+                        "nearest_transit_stop": listing["nearest_transit_stop"],
+                    }
+    return {"has_public_transit": False, "nearest_transit_stop": None}
 
 
 async def check_pickme_coverage(lat: float, lon: float) -> bool:
-    # Mock: return True for central coordinates
-    return True if (7.0 <= lat <= 8.0 and 80.0 <= lon <= 81.0) else False
+    return True  # mock: assume covered everywhere until real geofencing lands
 
 
-async def get_user_profile(user_id: str) -> Dict[str, Any]:
-    return {
-        "user_id": user_id,
-        "interests": ["nature", "history"],
-        "travel_style": "relaxed",
-        "budget": 500.0,
-        "home_location": {"lat": 7.2906, "lon": 80.6337},
-    }
+async def get_user_profile(user_id: str) -> dict:
+    return _MOCK_USER_PROFILES.get(
+        user_id,
+        {"interests": [], "travel_style": None, "budget": None, "home_location": None},
+    )
