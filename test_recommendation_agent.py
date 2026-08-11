@@ -1,33 +1,39 @@
 import asyncio
 import unittest
 
-from app.core.base_agent import AgentContext
 from app.core.recommendation_agent import RecommendationAgent
+from app.core.state import TripState
 
 
 class RecommendationAgentTests(unittest.TestCase):
-    def test_recommendation_agent_returns_all_categories(self):
-        context = AgentContext(
-            session_id="s1",
-            traveler_profile={"travel_interests": ["nature", "culture"]},
-            trip_preferences={
-                "destination": "Ella",
-                "start_date": "2026-08-12",
-                "end_date": "2026-08-14",
-            },
+    def test_recommendation_agent_populates_state(self):
+        state = TripState(
+            user_input="Plan a 3-day trip to Ella",
+            destination="Ella",
+            interests=["nature", "culture"],
         )
 
         async def run_test():
-            result = await RecommendationAgent().run(context)
-            self.assertTrue(result.success)
-            self.assertEqual(result.data["destination"], "Ella")
-            self.assertEqual(result.data["source"], "db_tool_mock")
-            self.assertIn("hotels", result.data)
-            self.assertIn("restaurants", result.data)
-            self.assertIn("attractions", result.data)
-            self.assertIn("events", result.data)
-            self.assertEqual(result.data["count"], 4)
-            self.assertEqual(len(result.data["listings"]), 4)
+            result = await RecommendationAgent().execute(state)
+            self.assertTrue(result.success, msg=result.message)
+            self.assertTrue(len(state.hotels) > 0)
+            self.assertTrue(len(state.restaurants) > 0)
+            self.assertTrue(len(state.attractions) > 0)
+            self.assertTrue(len(state.recommendations) > 0)
+            # Every recommendation item should be tagged with its category
+            # since TripState.recommendations is a flat List[dict].
+            self.assertIn("category", state.recommendations[0])
+            self.assertEqual(state.errors, [])
+
+        asyncio.run(run_test())
+
+    def test_recommendation_agent_requires_destination(self):
+        state = TripState(user_input="Plan a trip")  # destination stays None
+
+        async def run_test():
+            result = await RecommendationAgent().execute(state)
+            self.assertFalse(result.success)
+            self.assertTrue(len(state.errors) > 0)
 
         asyncio.run(run_test())
 

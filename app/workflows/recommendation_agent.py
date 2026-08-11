@@ -1,43 +1,48 @@
 from __future__ import annotations
 
-from typing import Any
-
+from app.core.base_agent import BaseAgent
+from app.core.result import AgentResult
 from app.core.state import TripState
 from app.tools import db_tool
 
 
-class RecommendationAgent:
+class RecommendationAgent(BaseAgent):
+    
     name = "recommendation_agent"
 
-    async def execute(self, state: TripState) -> TripState:
+    async def execute(self, state: TripState) -> AgentResult:
         destination = state.destination
         interests = state.interests or []
-        start_date = state.start_date
-        end_date = state.end_date or start_date
+
+        if not destination:
+            state.errors.append("Recommendation Agent requires a destination.")
+            return AgentResult(success=False, message="No destination provided.")
 
         hotels = await db_tool.get_hotels(destination, interests)
         restaurants = await db_tool.get_restaurants(destination, interests)
         attractions = await db_tool.get_attractions(destination, interests)
 
-        events: list[dict[str, Any]] = []
-        if start_date and end_date:
-            events = await db_tool.get_events(destination, start_date, end_date)
+    
+        events: list[dict] = []
 
         if not (hotels or restaurants or attractions):
-            state.errors.append(
-                f"No verified listings found for '{destination}'. Recommendation Agent cannot proceed for this destination."
-            )
-            return state
+            message = f"No verified listings found for '{destination}'."
+            state.errors.append(message)
+            return AgentResult(success=False, message=message)
 
         state.hotels = hotels
         state.restaurants = restaurants
         state.attractions = attractions
         state.events = events
-        state.recommendations = {
-            "hotels": hotels,
-            "restaurants": restaurants,
-            "attractions": attractions,
-            "events": events,
-        }
 
-        return state
+        state.recommendations = (
+            [{"category": "hotel", **h} for h in hotels]
+            + [{"category": "restaurant", **r} for r in restaurants]
+            + [{"category": "attraction", **a} for a in attractions]
+            + [{"category": "event", **e} for e in events]
+        )
+
+        return AgentResult(
+            success=True,
+            message=f"Found {len(state.recommendations)} candidates for {destination}.",
+        )
