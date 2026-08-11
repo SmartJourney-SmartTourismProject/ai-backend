@@ -14,6 +14,9 @@ class TripState(BaseModel):
     duration_days: Optional[int] = None
     budget: Optional[float] = None
     travelers: Optional[int] = None
+    user_id: Optional[str] = None
+    start_location: Optional[dict] = None       # {"lat": float, "lon": float, "source": "gps"|"ip"}
+    trip_dates: Optional[List[dict]] = None     # [{"start_date": "...", "end_date": "..."}]
 
     # User preferences
     interests: List[str] = Field(default_factory=list)
@@ -27,11 +30,13 @@ class TripState(BaseModel):
 
     # External context
     weather: Optional[dict] = None
+    disaster: Optional[dict] = None     # {"safe": bool, "active_events": [...]}
 
     # AI outputs
     attractions: List[dict] = Field(default_factory=list)
     hotels: List[dict] = Field(default_factory=list)
     restaurants: List[dict] = Field(default_factory=list)
+    events: List[dict] = Field(default_factory=list)
     itinerary: List[dict] = Field(default_factory=list)
 
     estimated_cost: Optional[float] = None
