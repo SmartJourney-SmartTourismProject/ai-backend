@@ -1,7 +1,12 @@
 import asyncio
 import unittest
+from pathlib import Path
 
-from app.core.recommendation_agent import RecommendationAgent
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).with_name(".env"))
+
+from app.workflows.recommendation_agent import RecommendationAgent
 from app.core.state import TripState
 
 

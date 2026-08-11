@@ -15,7 +15,7 @@ class PlanningAgent(BaseAgent):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Initialize Gemini LLM using the settings from your stack
-        self.llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.2)
+        self.llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0.2)
 
     async def execute(self, state: TripState) -> AgentResult:
         if not state.recommendations:
@@ -67,7 +67,18 @@ class PlanningAgent(BaseAgent):
             state.errors.append(str(e))
             return AgentResult(success=False, message=f"Planning LLM failed: {str(e)}")
 
-    def _parse_json_response(self, text: str) -> dict[str, Any]:
+    def _parse_json_response(self, text: Any) -> dict[str, Any]:
+        if isinstance(text, list):
+            parts: list[str] = []
+            for item in text:
+                if isinstance(item, dict) and "text" in item:
+                    parts.append(str(item["text"]))
+                else:
+                    parts.append(str(item))
+            text = "".join(parts)
+        elif not isinstance(text, str):
+            text = str(text)
+
         text = text.strip()
         if text.startswith("```json"):
             text = text[7:]
