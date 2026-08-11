@@ -92,3 +92,31 @@ async def get_free_days(user_id: str, search_window_days: int = 30) -> list[str]
 
     except Exception:
         return []
+
+
+    '''
+    User ID
+   │
+   ▼
+Get stored Google credentials
+   │
+   ├── No credentials ──► return []
+   │
+   ▼
+Check/refresh OAuth token
+   │
+   ▼
+Connect to Google Calendar
+   │
+   ▼
+Ask Google for busy periods
+   │
+   ▼
+Collect busy dates
+   │
+   ▼
+Check next 30 days
+   │
+   ▼
+Return dates that are not busy
+    '''
