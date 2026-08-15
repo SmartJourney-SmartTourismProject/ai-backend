@@ -1,6 +1,6 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
-# pydantic Instead of state["budget"] use state.budget
+
 
 class TripState(BaseModel):
     # Original user request
@@ -15,14 +15,14 @@ class TripState(BaseModel):
     budget: Optional[float] = None
     travelers: Optional[int] = None
     user_id: Optional[str] = None
-    start_location: Optional[dict] = None       # {"lat": float, "lon": float, "source": "gps"|"ip"}
-    trip_dates: Optional[List[dict]] = None     # [{"start_date": "...", "end_date": "..."}]
+    start_location: Optional[dict] = None    # {"lat": float, "lon": float, "source": "gps"|"ip"}
+    trip_dates: Optional[List[dict]] = None  # [{"start_date": "...", "end_date": "..."}]
 
     # User preferences
     interests: List[str] = Field(default_factory=list)
     travel_style: Optional[str] = None
 
-    # Retrieved data
+    # Retrieved data (raw RAG/API candidates, pre-ranking)
     candidate_attractions: List[dict] = Field(default_factory=list)
     candidate_hotels: List[dict] = Field(default_factory=list)
     candidate_restaurants: List[dict] = Field(default_factory=list)
@@ -30,11 +30,9 @@ class TripState(BaseModel):
 
     # External context
     weather: Optional[dict] = None
-    # Missing Phase 1 fields
-    disaster: dict | None = None
-    events: list[dict] | None = None
+    disaster: Optional[dict] = None
 
-    # AI outputs
+    # AI outputs (final, ranked selections)
     attractions: List[dict] = Field(default_factory=list)
     hotels: List[dict] = Field(default_factory=list)
     restaurants: List[dict] = Field(default_factory=list)
