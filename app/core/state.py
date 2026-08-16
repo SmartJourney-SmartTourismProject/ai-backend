@@ -39,6 +39,12 @@ class TripState(BaseModel):
     events: List[dict] = Field(default_factory=list)
     itinerary: List[dict] = Field(default_factory=list)
 
+    # Flat, category-tagged view of hotels+restaurants+attractions+events,
+    # built by RecommendationAgent. Pydantic models reject attribute
+    # assignment for undeclared fields, so this must be declared here --
+    # `state.recommendations = [...]` would otherwise raise at runtime.
+    recommendations: List[dict] = Field(default_factory=list)
+
     estimated_cost: Optional[float] = None
 
     # Final response
