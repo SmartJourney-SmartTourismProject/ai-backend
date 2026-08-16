@@ -15,7 +15,7 @@ class PlanningAgent(BaseAgent):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # Initialize Gemini LLM using the settings from your stack
-        self.llm = ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0.2)
+        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.2)
 
     async def execute(self, state: TripState) -> AgentResult:
         if not state.recommendations:
