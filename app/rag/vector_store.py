@@ -74,19 +74,17 @@ class VectorStore:
         if self._faiss_index is not None:
             import numpy as np
 
-            self._faiss_index.add(np.array(vectors, dtype="float32"))
+            # Normalize so inner product (IndexFlatIP) equals cosine similarity,
+            # matching the normalization applied to query vectors in _search_faiss.
+            vecs = np.array(vectors, dtype="float32")
+            faiss.normalize_L2(vecs)
+            self._faiss_index.add(vecs)
 
     def _maybe_init_faiss(self, dim: int) -> None:
         """Initialize a FAISS index when available."""
         if _FAISS_AVAILABLE:
             try:
-                import numpy as np
-
                 self._faiss_index = faiss.IndexFlatIP(dim)  # inner product == cosine on normalized vecs
-                # Normalize so inner product equals cosine similarity
-                existing = np.array(self._vectors, dtype="float32")
-                faiss.normalize_L2(existing)
-                self._faiss_index.add(existing)
                 logger.info("FAISS index initialized for %s (dim=%d)", self.index_name, dim)
             except Exception as exc:  # pragma: no cover
                 logger.warning("FAISS init failed, using python fallback: %s", exc)

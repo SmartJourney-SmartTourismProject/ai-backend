@@ -2,6 +2,7 @@
 LangGraph-based orchestrator workflow for multi-agent trip planning.
 Coordinates all agents and manages state transitions.
 """
+import asyncio
 from typing import Any, Dict, List, Optional, Literal
 from langgraph.graph import StateGraph
 from app.core.state import TripState
@@ -27,10 +28,9 @@ async def policy_check_node(state: TripState) -> TripState:
     
     agent = PolicyAgent()
     result = await agent.execute(state)
-    
-    if result.success:
-        state.completed_steps.append("policy_agent")
-    else:
+
+    # PolicyAgent.execute already appends "policy_agent" to completed_steps.
+    if not result.success:
         state.errors.append(f"Policy Agent failed: {result.message}")
     
     return state
@@ -45,8 +45,7 @@ async def location_resolver_node(state: TripState) -> TripState:
         state.completed_steps.append("location_resolver")
         return state
     
-    # TODO: Implement actual location resolution (GPS, IP fallback)
-    # For now, just mark as complete and continue
+    
     state.completed_steps.append("location_resolver")
     return state
 
@@ -59,52 +58,49 @@ async def calendar_check_node(state: TripState) -> TripState:
     
     agent = CalendarAgent()
     result = await agent.execute(state)
-    
-    if result.success:
-        state.completed_steps.append("calendar_agent")
-    else:
+
+    # CalendarAgent.execute already appends "calendar_agent" to completed_steps.
+    if not result.success:
         state.errors.append(f"Calendar Agent failed: {result.message}")
     
     return state
 
 
-async def weather_check_node(state: TripState) -> TripState:
+async def weather_disaster_node(state: TripState) -> TripState:
     """
-    Fetch weather forecast for destination and trip dates.
+    Fetch weather and disaster data concurrently via asyncio.gather, inside a
+    single graph node.
+
+    TripState is a plain Pydantic model with no reducers on its fields, so
+    two graph-level edges converging on the same downstream node (e.g. both
+    weather_check_node and disaster_check_node -> recommendation_agent) is
+    unsafe in LangGraph: it either runs the downstream node twice or raises
+    a concurrent-update conflict when both branches complete in the same
+    super-step. Running both agents concurrently *inside* one node sidesteps
+    that entirely -- there's only ever a single edge into recommendation_agent.
     """
     from app.workflows.weather_agent import WeatherAgent
-    
-    agent = WeatherAgent()
-    result = await agent.execute(state)
-    
-    if result.success:
-        state.completed_steps.append("weather_agent")
-    else:
-        state.errors.append(f"Weather Agent failed: {result.message}")
-    
-    return state
-
-
-async def disaster_check_node(state: TripState) -> TripState:
-    """
-    Fetch disaster alerts (earthquakes, floods, etc.) for destination.
-    """
     from app.workflows.disaster_agent import DisasterAgent
-    
-    agent = DisasterAgent()
-    result = await agent.execute(state)
-    
-    if result.success:
-        state.completed_steps.append("disaster_agent")
-    else:
-        state.errors.append(f"Disaster Agent failed: {result.message}")
-    
+
+    weather_result, disaster_result = await asyncio.gather(
+        WeatherAgent().execute(state),
+        DisasterAgent().execute(state),
+    )
+
+    # WeatherAgent/DisasterAgent.execute already append their own step names
+    # to completed_steps.
+    if not weather_result.success:
+        state.errors.append(f"Weather Agent failed: {weather_result.message}")
+
+    if not disaster_result.success:
+        state.errors.append(f"Disaster Agent failed: {disaster_result.message}")
+
     return state
 
 
 def route_to_recommendation(state: TripState) -> str:
     """
-    After weather/disaster parallel execution, route to recommendation agent.
+    After weather/disaster fetch completes, route to recommendation agent.
     """
     if not state.destination:
         state.errors.append("Destination is required for recommendations.")
@@ -210,56 +206,59 @@ def build_orchestrator_graph() -> StateGraph:
     2. policy_check_node
     3. location_resolver_node
     4. calendar_check_node
-    5. weather_check_node (parallel with disaster_check_node)
+    5. weather_disaster_node (weather + disaster fetched concurrently via asyncio.gather)
     6. recommendation_agent_node
     7. planning_agent_node
     8. finalize_response
     """
     graph = StateGraph(TripState)
-    
+
     # Add nodes
     graph.add_node("validate_input", validate_input)
     graph.add_node("policy_check_node", policy_check_node)
     graph.add_node("location_resolver_node", location_resolver_node)
     graph.add_node("calendar_check_node", calendar_check_node)
-    graph.add_node("weather_check_node", weather_check_node)
-    graph.add_node("disaster_check_node", disaster_check_node)
+    graph.add_node("weather_disaster_node", weather_disaster_node)
     graph.add_node("recommendation_agent", recommendation_agent_node)
     graph.add_node("planning_agent", planning_agent_node)
     graph.add_node("finalize_response", finalize_response)
     graph.add_node("error", finalize_response)  # Error handler
-    
+
     # Add edges - sequential flow
-    graph.add_edge("validate_input", "policy_check_node")
     graph.add_edge("policy_check_node", "location_resolver_node")
     graph.add_edge("location_resolver_node", "calendar_check_node")
-    graph.add_edge("calendar_check_node", "weather_check_node")
-    graph.add_edge("calendar_check_node", "disaster_check_node")
-    
-    # After weather and disaster complete, go to recommendation
-    graph.add_edge("weather_check_node", "recommendation_agent")
-    graph.add_edge("disaster_check_node", "recommendation_agent")
-    
+    graph.add_edge("calendar_check_node", "weather_disaster_node")
+
     # Then planning and finalize
     graph.add_edge("recommendation_agent", "planning_agent")
     graph.add_edge("planning_agent", "finalize_response")
-    
+
     # Set entry point
     graph.set_entry_point("validate_input")
-    
+
     # Set finish point
     graph.set_finish_point("finalize_response")
-    
-    # Add conditional routing for validation errors
+
+    # Route to policy_check_node on valid input, or straight to the error
+    # handler on invalid input. This must be the *only* outgoing edge from
+    # validate_input -- an additional unconditional add_edge alongside this
+    # conditional edge would fire regardless of validation errors and let
+    # the whole pipeline run even on invalid input.
     graph.add_conditional_edges(
         "validate_input",
         lambda s: "error" if len(s.errors) > 0 else "policy_check_node",
         {"error": "error", "policy_check_node": "policy_check_node"}
     )
-    
-    # Add normal edges from validate_input
-    graph.add_edge("validate_input", "policy_check_node")
-    
+
+    # weather_disaster_node runs weather + disaster concurrently internally,
+    # then routes to recommendation only if a destination is present --
+    # no converging edges into recommendation_agent.
+    graph.add_conditional_edges(
+        "weather_disaster_node",
+        route_to_recommendation,
+        {"recommendation_agent": "recommendation_agent", "error": "error"}
+    )
+
     return graph
 
 
