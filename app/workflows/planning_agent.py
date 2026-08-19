@@ -4,6 +4,7 @@ import json
 from typing import Any
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from app.config.settings import settings
 from app.core.base_agent import BaseAgent
 from app.core.result import AgentResult
 from app.core.state import TripState
@@ -14,8 +15,9 @@ class PlanningAgent(BaseAgent):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        # Initialize Gemini LLM using the settings from your stack
-        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.2)
+        self.llm = ChatGoogleGenerativeAI(
+            model=settings.llm_model, temperature=settings.llm_temperature
+        )
 
     async def execute(self, state: TripState) -> AgentResult:
         if not state.recommendations:
