@@ -1,5 +1,5 @@
 # app/tools/calendar_tool.py
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -38,12 +38,42 @@ def _creds_dict_to_google_credentials(creds: dict) -> Credentials:
     )
 
 
-async def get_free_days(user_id: str, search_window_days: int = 30) -> list[str]:
+def _group_into_ranges(free_days: list[str]) -> list[dict]:
+    """Collapse a sorted list of ISO date strings into contiguous ranges."""
+    if not free_days:
+        return []
+
+    ranges = []
+    start = prev = date.fromisoformat(free_days[0])
+
+    for day_str in free_days[1:]:
+        day = date.fromisoformat(day_str)
+        if (day - prev).days == 1:
+            prev = day
+            continue
+        ranges.append({"start_date": start.isoformat(), "end_date": prev.isoformat()})
+        start = prev = day
+
+    ranges.append({"start_date": start.isoformat(), "end_date": prev.isoformat()})
+    return ranges
+
+
+async def get_free_days(user_id: str, search_window_days: int = 30) -> list[dict]:
     """
-    Returns a list of ISO date strings (YYYY-MM-DD) within the next
-    `search_window_days` where the user has no calendar events.
+    Returns contiguous free-day ranges within the next `search_window_days`,
+    e.g. [{"start_date": "2026-08-20", "end_date": "2026-08-22"}, ...].
     If no calendar is connected (or anything fails), returns [] rather
     than raising — calendar failures should never block the graph.
+
+    Flow:
+        user_id
+          -> get stored Google credentials (none -> return [])
+          -> check/refresh OAuth token
+          -> connect to Google Calendar
+          -> ask Google for busy periods (freebusy().query)
+          -> collect busy dates
+          -> check next `search_window_days` days
+          -> group the free (non-busy) days into contiguous ranges
     """
     stored = await get_stored_credentials(user_id)
     if not stored:
@@ -88,35 +118,7 @@ async def get_free_days(user_id: str, search_window_days: int = 30) -> list[str]
                 free_days.append(d.isoformat())
             d += timedelta(days=1)
 
-        return free_days
+        return _group_into_ranges(free_days)
 
     except Exception:
         return []
-
-
-    '''
-    User ID
-   │
-   ▼
-Get stored Google credentials
-   │
-   ├── No credentials ──► return []
-   │
-   ▼
-Check/refresh OAuth token
-   │
-   ▼
-Connect to Google Calendar
-   │
-   ▼
-Ask Google for busy periods
-   │
-   ▼
-Collect busy dates
-   │
-   ▼
-Check next 30 days
-   │
-   ▼
-Return dates that are not busy
-    '''
