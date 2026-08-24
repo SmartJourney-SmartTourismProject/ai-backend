@@ -1,6 +1,6 @@
 # test_location_tool.py
 # Run from your project root: python3 test_location_tool.py
-# Note: this makes a REAL network call to ipapi.co for the IP-fallback case,
+# Note: this makes a REAL network call to ip-api.com for the IP-fallback case,
 # so you need internet access when running it.
 
 import asyncio
@@ -14,7 +14,7 @@ async def main():
     r1 = await resolve_start_location(client_gps={"lat": 7.2906, "lon": 80.6337}, client_ip=None)
     results.append(("GPS provided", r1, r1 is not None and r1["source"] == "gps"))
 
-    # 2. No GPS, valid public IP -> should hit ipapi.co and return source="ip"
+    # 2. No GPS, valid public IP -> should hit ip-api.com and return source="ip"
     r2 = await resolve_start_location(client_gps=None, client_ip="8.8.8.8")
     results.append(("IP fallback (8.8.8.8)", r2, r2 is not None and r2["source"] == "ip"))
 
