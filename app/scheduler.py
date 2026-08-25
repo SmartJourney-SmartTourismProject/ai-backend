@@ -4,8 +4,9 @@ Automated data-refresh scheduler, wired into the FastAPI app lifecycle
 
 Cadence (per project decision, see BUILD_PLAN.md §1):
   - Weather:  no scheduled job - fetched live per request with a short Redis
-              cache (see app/utils/cache.py + app/workflows/weather_agent.py).
-  - Events:   weekly  (Ticketmaster + Eventbrite, all 25 districts).
+              cache (see app/utils/cache.py + app/workflows/context_agent.py).
+  - Events:   weekly  (Ticketmaster, all 25 districts - Eventbrite was dropped,
+              see events_ingest.py's module docstring for why).
   - Hotels/restaurants/attractions + real prices: monthly
               (Overpass + Booking.com, all 25 districts).
 

@@ -11,11 +11,19 @@ from app.core.state import TripState
 from app.tools import db_tool
 from app.rag.rag_service import rag_service
 
-# Ensure this prompt file exists in your project!
-from app.prompts.recommendation_prompt import RECOMMENDATION_SYSTEM_PROMPT
+from app.prompts.recommendation_planning_prompt import RECOMMENDATION_PLANNING_SYSTEM_PROMPT
 
 
 class RecommendationAgent(BaseAgent):
+    """
+    Curates candidate hotels/restaurants/attractions/events AND builds the
+    day-by-day itinerary in a single LLM call. Combined with PlanningAgent's
+    job (see planning_agent.py, still available standalone e.g. for a
+    "regenerate my itinerary" action) to cut LLM calls per trip-plan request
+    from 3 to 2 - recommendation and planning both need the same candidate
+    data, weather, and disaster context, so there's nothing planning needs
+    that isn't already available at this point in the graph.
+    """
     name = "recommendation_agent"
 
     # Candidates retrieved per category before LLM curation.
@@ -26,7 +34,7 @@ class RecommendationAgent(BaseAgent):
         self.llm = ChatGoogleGenerativeAI(
             model=settings.llm_model, temperature=settings.llm_temperature
         )
-        self.system_prompt = RECOMMENDATION_SYSTEM_PROMPT
+        self.system_prompt = RECOMMENDATION_PLANNING_SYSTEM_PROMPT
 
     async def execute(self, state: TripState) -> AgentResult:
         destination = state.destination
@@ -77,10 +85,17 @@ class RecommendationAgent(BaseAgent):
         attractions = self._retrieve_or_fallback("attraction", query, destination, attractions)
         events = self._retrieve_or_fallback("event", query, destination, events)
 
-        # 2. Build the payload for the LLM
+        # 2. Build the payload for the LLM - candidates plus the planning
+        # constraints PlanningAgent would otherwise need a second call for.
+        duration_days = state.duration_days if state.duration_days and state.duration_days > 0 else 1
         payload = {
             "destination": destination,
             "interests": interests,
+            "duration_days": duration_days,
+            "budget": state.budget,
+            "travelers": state.travelers or 1,
+            "weather_forecast": state.weather,
+            "disaster_warnings": state.disaster,
             "candidate_hotels": hotels,
             "candidate_restaurants": restaurants,
             "candidate_attractions": attractions,
@@ -90,22 +105,21 @@ class RecommendationAgent(BaseAgent):
         prompt = (
             f"{self.system_prompt}\n\n"
             f"Candidate Data:\n{json.dumps(payload, indent=2)}\n\n"
-            "Return valid JSON containing keys 'hotels', 'restaurants', 'attractions', and 'events'."
+            "Return valid JSON containing keys 'hotels', 'restaurants', 'attractions', 'events', "
+            "'itinerary', 'estimated_cost', and 'budget_notes'."
         )
 
         try:
-            # 3. Call Gemini to curate and rank the list
+            # 3. Single call: curate candidates AND build the itinerary
             llm_response = await self.llm.ainvoke(prompt)
             parsed = self._parse_json_response(llm_response.content)
 
-            # 4. Assign outputs back to state
+            # 4. Assign recommendation outputs back to state
             state.hotels = parsed.get("hotels", hotels)
             state.restaurants = parsed.get("restaurants", restaurants)
             state.attractions = parsed.get("attractions", attractions)
-            
-            # Fulfilling the Phase 2 requirement to add the events key
-            state.events = parsed.get("events", events) 
-            
+            state.events = parsed.get("events", events)
+
             # Populate flat recommendations list
             state.recommendations = (
                 [{"category": "hotel", **h} for h in state.hotels]
@@ -114,8 +128,13 @@ class RecommendationAgent(BaseAgent):
                 + [{"category": "event", **e} for e in state.events]
             )
 
-            return AgentResult(success=True, message=f"LLM successfully curated candidates for {destination}.")
-            
+            # 5. Assign planning outputs back to state (previously PlanningAgent's job)
+            state.itinerary = parsed.get("itinerary", [])
+            state.estimated_cost = parsed.get("estimated_cost", 0.0)
+            state.final_response = parsed.get("budget_notes", "")
+
+            return AgentResult(success=True, message=f"Recommendations and itinerary built for {destination}.")
+
         except Exception as e:
             state.errors.append(str(e))
             return AgentResult(success=False, message=f"Recommendation LLM failed: {str(e)}")
