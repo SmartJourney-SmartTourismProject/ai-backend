@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # ===== LLM & AI Configuration =====
     google_api_key: str = ""  # Gemini API key (required for LLM, optional for testing)
-    llm_model: str = "gemini-2.0-flash"
+    llm_model: str = "gemini-3.6-flash"  # gemini-2.0-flash was retired by Google (404 on live calls)
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
 
@@ -25,12 +25,11 @@ class Settings(BaseSettings):
     openweather_api_key: str = ""
     google_maps_api_key: str = ""
     ticketmaster_api_key: str = ""
-    eventbrite_api_key: str = ""
     yelp_fusion_api_key: str = ""
     google_calendar_client_id: str = ""
     google_calendar_client_secret: str = ""
     booking_rapidapi_key: str = ""  # RapidAPI key for Booking.com (real hotel nightly prices)
-    booking_rapidapi_host: str = "booking-com.p.rapidapi.com"
+    booking_rapidapi_host: str = "booking-com15.p.rapidapi.com"
 
     # ===== Server Configuration =====
     api_host: str = "0.0.0.0"

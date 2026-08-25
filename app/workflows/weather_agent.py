@@ -12,20 +12,35 @@ from app.config.settings import settings
 from app.core.base_agent import BaseAgent
 from app.core.result import AgentResult
 from app.core.state import TripState
+from app.data.sri_lanka_districts import get_district
+from app.utils.cache import cache_get, cache_set
 
 logger = logging.getLogger(__name__)
+
+# Real-time weather isn't batch-refreshed - it's fetched live per request and
+# cached briefly so repeat requests for the same location within a few
+# minutes don't re-hit OpenWeather (see BUILD_PLAN.md §1/§8).
+WEATHER_CACHE_TTL_SECONDS = 15 * 60
+
+# A few well-known tourist towns that aren't a district name/capital
+# themselves, kept alongside the district lookup for backwards compatibility.
+_EXTRA_TOWN_COORDS = {
+    "negombo": {"lat": 7.2064, "lon": 79.8581},
+    "ella": {"lat": 6.8658, "lon": 81.0467},
+    "mirissa": {"lat": 5.9471, "lon": 80.7757},
+}
 
 
 class WeatherAgent(BaseAgent):
     """Fetches weather forecast for trip destination."""
-    
+
     name = "weather_agent"
     OPENWEATHER_BASE_URL = "https://api.openweathermap.org/data/2.5"
-    
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.api_key = settings.openweather_api_key
-    
+
     async def execute(self, state: TripState) -> AgentResult:
         """
         Fetch current weather and forecast for destination.
@@ -36,7 +51,7 @@ class WeatherAgent(BaseAgent):
                 success=False,
                 message="No destination provided for weather check."
             )
-        
+
         if not self.api_key:
             logger.warning("OpenWeather API key not configured, using fallback weather.")
             state.weather = self._get_fallback_weather()
@@ -45,12 +60,10 @@ class WeatherAgent(BaseAgent):
                 success=True,
                 message="Using fallback weather data (API key not configured)."
             )
-        
+
         try:
-            # Get coordinates for destination (using mock for now)
-            # TODO: Integrate with geocoding API
             coords = await self._get_destination_coords(state.destination)
-            
+
             if not coords:
                 state.weather = self._get_fallback_weather()
                 state.completed_steps.append("weather_agent")
@@ -58,17 +71,27 @@ class WeatherAgent(BaseAgent):
                     success=True,
                     message=f"Could not find coordinates for {state.destination}, using fallback."
                 )
-            
+
+            cache_key = f"weather:{coords['lat']:.2f}:{coords['lon']:.2f}"
+            cached = await cache_get(cache_key)
+            if cached:
+                state.weather = {**cached, "destination": state.destination}
+                state.completed_steps.append("weather_agent")
+                return AgentResult(
+                    success=True,
+                    message=f"Weather forecast (cached) for {state.destination}."
+                )
+
             # Fetch current weather
             current_weather = await self._fetch_current_weather(
                 coords["lat"], coords["lon"]
             )
-            
+
             # Fetch forecast
             forecast = await self._fetch_forecast(
                 coords["lat"], coords["lon"]
             )
-            
+
             state.weather = {
                 "destination": state.destination,
                 "coordinates": coords,
@@ -76,13 +99,14 @@ class WeatherAgent(BaseAgent):
                 "forecast": forecast,
                 "fetched_at": datetime.utcnow().isoformat(),
             }
-            
+            await cache_set(cache_key, state.weather, WEATHER_CACHE_TTL_SECONDS)
+
             state.completed_steps.append("weather_agent")
             return AgentResult(
                 success=True,
                 message=f"Weather forecast fetched for {state.destination}."
             )
-        
+
         except Exception as e:
             logger.exception("Weather agent failed: %s", str(e))
             state.weather = self._get_fallback_weather()
@@ -92,24 +116,17 @@ class WeatherAgent(BaseAgent):
                 success=True,  # Don't fail the entire flow
                 message=f"Weather check failed, using fallback: {str(e)}"
             )
-    
+
     async def _get_destination_coords(self, destination: str) -> Optional[dict]:
         """
-        Get latitude/longitude for destination.
-        TODO: Replace with real geocoding (Google Maps, OpenWeather Geo API, etc.)
+        Get latitude/longitude for destination: checks all 25 Sri Lanka
+        districts first, then a short list of well-known tourist towns.
         """
-        # Mock coordinates for common destinations
-        mock_coords = {
-            "colombo": {"lat": 6.9271, "lon": 80.7789},
-            "kandy": {"lat": 7.2906, "lon": 80.6337},
-            "galle": {"lat": 6.0535, "lon": 80.2210},
-            "negombo": {"lat": 7.2064, "lon": 79.8581},
-            "ella": {"lat": 6.8658, "lon": 81.0467},
-            "mirissa": {"lat": 5.9471, "lon": 80.7757},
-        }
-        
-        destination_lower = destination.lower().strip()
-        return mock_coords.get(destination_lower)
+        district = get_district(destination)
+        if district:
+            return {"lat": district["lat"], "lon": district["lon"]}
+
+        return _EXTRA_TOWN_COORDS.get(destination.lower().strip())
     
     async def _fetch_current_weather(self, lat: float, lon: float) -> dict:
         """Fetch current weather from OpenWeather API."""
