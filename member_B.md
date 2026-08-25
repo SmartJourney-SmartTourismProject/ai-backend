@@ -29,3 +29,19 @@ app/utils/slot_filling.py now uses "gemini-3.6-flash" instead of
 to new API keys). If Recommendation/Planner agents reference
 gemini-2.5-flash or another deprecated model name anywhere, worth
 checking and updating those too.
+
+## Member A: orchestrator.py built with stub Recommendation/Planner nodes
+
+app/core/orchestrator.py wires the full graph: validate -> policy ->
+slot_fill -> location -> calendar -> context -> recommend -> plan -> respond.
+
+RecommendationAgent and PlannerAgent are currently stubs (fixed/trivial
+logic) wrapped as BaseAgent subclasses — this is deliberately the shape
+your real agents should match: `async def execute(self, state) ->
+AgentResult`. Swap the class bodies for real logic in Phase 4; the graph
+wiring (add_node/add_edge calls) shouldn't need to change.
+
+Also: app/api/trip.py (Phase 5, not built yet) needs to set client_gps
+and client_ip on TripState before calling orchestrator.ainvoke(state) —
+location_node currently reads these via getattr() with a None fallback
+since they don't exist on TripState yet.
