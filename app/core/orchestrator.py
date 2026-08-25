@@ -56,9 +56,14 @@ async def _slot_fill_node(state: TripState) -> TripState:
 
 
 async def _location_node(state: TripState) -> TripState:
-    client_gps = getattr(state, "client_gps", None)
-    client_ip = getattr(state, "client_ip", None)
-    location = await resolve_start_location(client_gps, client_ip)
+    # If the API layer already resolved this (it has direct access to the
+    # real HTTP request's IP/GPS, which TripState doesn't carry as fields),
+    # don't re-resolve.
+    if state.start_location:
+        state.completed_steps.append("location")
+        return state
+
+    location = await resolve_start_location(client_gps=None, client_ip=None)
     if location:
         state.start_location = location
     else:
