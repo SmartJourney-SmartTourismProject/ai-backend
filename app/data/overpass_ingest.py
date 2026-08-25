@@ -19,12 +19,19 @@ import requests
 
 from app.config.settings import settings
 from app.data.sri_lanka_districts import DISTRICTS
-from app.data.supabase_writer import upsert_rows
+from app.data.supabase_writer import (
+    get_category_id_map,
+    get_district_id_map,
+    has_column,
+    to_point_wkt,
+    upsert_rows,
+)
 
 logger = logging.getLogger(__name__)
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-BOOKING_SEARCH_URL_TMPL = "https://{host}/v1/hotels/search-by-coordinates"
+BOOKING_DESTINATION_URL_TMPL = "https://{host}/api/v1/hotels/searchDestination"
+BOOKING_SEARCH_URL_TMPL = "https://{host}/api/v1/hotels/searchHotels"
 
 # Every district is now in scope (see app/data/sri_lanka_districts.py).
 # Kept as a module-level name for backwards compatibility with any callers
@@ -90,14 +97,50 @@ def fetch_overpass_data(query: str, session: requests.Session) -> dict[str, Any]
         return {}
 
 
-def fetch_booking_prices(lat: float, lon: float, session: requests.Session) -> list[dict[str, Any]]:
+def _booking_headers() -> dict[str, str]:
+    return {
+        "X-RapidAPI-Key": settings.booking_rapidapi_key,
+        "X-RapidAPI-Host": settings.booking_rapidapi_host,
+    }
+
+
+def _find_destination_id(district_name: str, session: requests.Session) -> Optional[dict]:
     """
-    Fetches real nightly hotel prices near (lat, lon) from the Booking.com API
-    (RapidAPI). One call per district keeps this well inside free-tier limits
-    instead of one call per hotel. Returns [] if no key is configured or the
-    call fails - price enrichment is best-effort, never blocks the base sync.
+    Resolves a district name (e.g. "Kandy") to a Booking.com dest_id/search_type
+    pair via searchDestination. Prefers the Sri Lanka match with the most
+    hotels (searchDestination can return same-named places in other countries).
+    """
+    url = BOOKING_DESTINATION_URL_TMPL.format(host=settings.booking_rapidapi_host)
+    try:
+        resp = session.get(url, headers=_booking_headers(), params={"query": district_name}, timeout=30)
+        resp.raise_for_status()
+        candidates = resp.json().get("data", [])
+    except requests.exceptions.RequestException as e:
+        print(f"  [!] Booking.com destination lookup failed: {e}")
+        return None
+
+    sri_lanka_matches = [c for c in candidates if c.get("country") == "Sri Lanka"]
+    if not sri_lanka_matches:
+        return None
+
+    best = max(sri_lanka_matches, key=lambda c: c.get("hotels", 0))
+    return {"dest_id": best["dest_id"], "search_type": best.get("search_type", "city")}
+
+
+def fetch_booking_prices(district_name: str, session: requests.Session) -> list[dict[str, Any]]:
+    """
+    Fetches real nightly hotel prices for a district from the Booking.com API
+    (RapidAPI, booking-com15 host). One destination lookup + one hotel search
+    per district keeps this well inside free-tier limits instead of one call
+    per hotel. Returns [] if no key is configured or any call fails - price
+    enrichment is best-effort, never blocks the base Overpass sync.
     """
     if not settings.booking_rapidapi_key:
+        return []
+
+    destination = _find_destination_id(district_name, session)
+    if destination is None:
+        print(f"  [!] Booking.com has no Sri Lanka destination match for '{district_name}'.")
         return []
 
     checkin = date.today() + timedelta(days=30)
@@ -105,42 +148,36 @@ def fetch_booking_prices(lat: float, lon: float, session: requests.Session) -> l
 
     url = BOOKING_SEARCH_URL_TMPL.format(host=settings.booking_rapidapi_host)
     params = {
-        "latitude": lat,
-        "longitude": lon,
-        "checkin_date": checkin.isoformat(),
-        "checkout_date": checkout.isoformat(),
-        "adults_number": "2",
-        "room_number": "1",
-        "order_by": "distance",
-        "filter_by_currency": "USD",
-        "units": "metric",
-        "locale": "en-gb",
-        "page_number": "0",
-    }
-    headers = {
-        "X-RapidAPI-Key": settings.booking_rapidapi_key,
-        "X-RapidAPI-Host": settings.booking_rapidapi_host,
+        "dest_id": destination["dest_id"],
+        "search_type": destination["search_type"],
+        "arrival_date": checkin.isoformat(),
+        "departure_date": checkout.isoformat(),
+        "adults": "2",
+        "room_qty": "1",
+        "page_number": "1",
+        "currency_code": "USD",
     }
 
     try:
-        resp = session.get(url, params=params, headers=headers, timeout=30)
+        resp = session.get(url, headers=_booking_headers(), params=params, timeout=30)
         resp.raise_for_status()
-        data = resp.json()
+        hotels = resp.json().get("data", {}).get("hotels", [])
     except requests.exceptions.RequestException as e:
-        print(f"  [!] Booking.com price lookup failed: {e}")
+        print(f"  [!] Booking.com hotel search failed: {e}")
         return []
 
     results = []
-    for hotel in data.get("result", []):
-        price = hotel.get("min_total_price")
-        if price is None:
+    for hotel in hotels:
+        prop = hotel.get("property", {})
+        price = prop.get("priceBreakdown", {}).get("grossPrice", {})
+        if price.get("value") is None:
             continue
         results.append({
-            "name": hotel.get("hotel_name", ""),
-            "lat": hotel.get("latitude"),
-            "lon": hotel.get("longitude"),
-            "price_per_night": price,
-            "currency": hotel.get("currencycode", "USD"),
+            "name": prop.get("name", ""),
+            "lat": prop.get("latitude"),
+            "lon": prop.get("longitude"),
+            "price_per_night": price["value"],
+            "currency": price.get("currency", "USD"),
         })
     return results
 
@@ -237,20 +274,77 @@ def process_district(district_name: str, session: requests.Session) -> list[dict
 
         processed_listings.append(listing)
 
-    # 3. Enrich hotel prices via Booking.com (one call per district)
+    # 3. Enrich hotel prices via Booking.com (one destination lookup + one search per district)
     district_centroid = next(
         (d for d in DISTRICTS if d["osm_name"] == district_name), None
     )
     if district_centroid:
         time.sleep(2)
-        booking_hotels = fetch_booking_prices(
-            district_centroid["lat"], district_centroid["lon"], session
-        )
+        booking_hotels = fetch_booking_prices(district_centroid["name"], session)
         if booking_hotels:
             print(f"  -> Matched against {len(booking_hotels)} Booking.com hotel prices.")
         attach_prices(processed_listings, booking_hotels)
 
     return processed_listings
+
+
+def _price_range_bucket(price_per_night: Optional[float]) -> Optional[str]:
+    """Buckets a real USD nightly price into the $/$$/$$$/$$$$ scale the schema already uses."""
+    if price_per_night is None:
+        return None
+    if price_per_night < 30:
+        return "$"
+    if price_per_night < 70:
+        return "$$"
+    if price_per_night < 150:
+        return "$$$"
+    return "$$$$"
+
+
+def build_db_rows(listings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Maps our internal listing shape (flat district/category/lat/lon) onto
+    `travel_listing`'s real schema: district_id/category_id foreign keys and
+    a PostGIS `location` point. Listings whose district/category can't be
+    resolved are dropped (logged) rather than sent with a broken row.
+    """
+    district_map = get_district_id_map()
+    category_map = get_category_id_map()
+    include_price_columns = has_column("travel_listing", "price_per_night")
+
+    rows = []
+    for listing in listings:
+        district_id = district_map.get(listing["district"])
+        category_id = category_map.get(listing["category"])
+        if district_id is None or category_id is None:
+            print(f"  [!] Skipping '{listing['name']}' - unknown district/category, not synced.")
+            continue
+
+        row = {
+            "district_id": district_id,
+            "category_id": category_id,
+            "name": listing["name"],
+            "location": to_point_wkt(listing["lat"], listing["lon"]),
+            "price_range": _price_range_bucket(listing.get("price_per_night")),
+            "source": listing["source"],
+            "external_ref": listing["external_ref"],
+            "has_public_transit": listing["has_public_transit"],
+            "nearest_transit_stop": listing["nearest_transit_stop"],
+            "is_verified": listing["is_verified"],
+        }
+        if include_price_columns:
+            row["price_per_night"] = listing.get("price_per_night")
+            row["currency"] = listing.get("currency")
+        rows.append(row)
+
+    if not include_price_columns:
+        print(
+            "  [!] 'travel_listing' has no price_per_night/currency columns yet - "
+            "real Booking.com prices are only stored as the $/$$/$$$ bucket. "
+            "Run the migration in the project's setup notes to store exact prices."
+        )
+
+    return rows
 
 
 def run_ingestion() -> None:
@@ -272,7 +366,8 @@ def run_ingestion() -> None:
 
     print(f"\n[SUCCESS] Ingestion complete. Total named listings structured for database: {len(all_listings)}")
 
-    synced = upsert_rows("travel_listing", all_listings, on_conflict="external_ref")
+    db_rows = build_db_rows(all_listings)
+    synced = upsert_rows("travel_listing", db_rows, on_conflict="external_ref")
     if synced:
         print(f"[SUCCESS] Upserted {synced} rows into Supabase 'travel_listing'.")
     else:
