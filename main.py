@@ -10,6 +10,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -21,6 +22,8 @@ from pydantic import BaseModel, Field
 from app.core.state import TripState
 from app.workflows.orchestrator import get_orchestrator_graph
 from app.rag.rag_service import rag_service
+from app.scheduler import start_scheduler, stop_scheduler
+from app.data import events_ingest, overpass_ingest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -216,12 +219,41 @@ async def list_agents() -> Dict[str, Any]:
     }
 
 
+@app.post("/api/admin/sync/events")
+async def trigger_events_sync():
+    """
+    Manually trigger the weekly events sync (Ticketmaster/Eventbrite, all districts).
+    Runs in a background thread and returns immediately - the sync itself takes
+    several minutes across 25 districts; check server logs for completion.
+    """
+    asyncio.get_running_loop().run_in_executor(None, events_ingest.run_ingestion)
+    return {"status": "started", "message": "Events sync started in the background."}
+
+
+@app.post("/api/admin/sync/listings")
+async def trigger_listings_sync():
+    """
+    Manually trigger the monthly hotels/restaurants/attractions + price sync (all districts).
+    Runs in a background thread and returns immediately - the sync itself takes
+    several minutes across 25 districts; check server logs for completion.
+    """
+    asyncio.get_running_loop().run_in_executor(None, overpass_ingest.run_ingestion)
+    return {"status": "started", "message": "Listings sync started in the background."}
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Initialize orchestrator on startup."""
+    """Initialize orchestrator and the automated data-refresh scheduler on startup."""
     logger.info("Starting SmartJourney AI Backend...")
     get_orchestrator()
+    start_scheduler()
     logger.info("Ready to serve requests")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop the background scheduler cleanly."""
+    stop_scheduler()
 
 
 if __name__ == "__main__":

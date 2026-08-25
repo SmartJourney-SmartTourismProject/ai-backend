@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     yelp_fusion_api_key: str = ""
     google_calendar_client_id: str = ""
     google_calendar_client_secret: str = ""
+    booking_rapidapi_key: str = ""  # RapidAPI key for Booking.com (real hotel nightly prices)
+    booking_rapidapi_host: str = "booking-com.p.rapidapi.com"
 
     # ===== Server Configuration =====
     api_host: str = "0.0.0.0"
