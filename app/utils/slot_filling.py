@@ -34,9 +34,20 @@ class _ExtractedSlots(BaseModel):
 
 _SYSTEM_PROMPT = """You extract structured trip-planning details from a
 traveler's message. Only extract what is explicitly stated or clearly
-inferable (e.g. "a week" -> 7 days, "my wife and kid" -> 3 travelers).
-Never invent or assume a value that isn't grounded in the text. Leave a
-field null/empty if it isn't mentioned."""
+inferable from specific wording (e.g. "a week" -> 7 days, "my wife and
+kid" -> 3 travelers).
+
+Do NOT fill in a field just because a trip is being discussed. In
+particular:
+- Do not default travelers to 1 just because the message is about a
+  trip. Only set travelers when the message actually indicates who is
+  going (e.g. "just me", "solo", "my family", a specific count).
+- Do not guess a duration, budget, or destination that isn't stated or
+  clearly implied.
+
+If a field is not mentioned, leave it null (or an empty list for
+interests) — do not use a "reasonable default." A missing value is the
+correct output when the user didn't say anything about that field."""
 
 
 async def fill_slots(state: TripState) -> TripState:
