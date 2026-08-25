@@ -2,7 +2,6 @@
 LangGraph-based orchestrator workflow for multi-agent trip planning.
 Coordinates all agents and manages state transitions.
 """
-import asyncio
 from typing import Any, Dict, List, Optional, Literal
 from langgraph.graph import StateGraph
 from app.core.state import TripState
@@ -33,6 +32,20 @@ async def policy_check_node(state: TripState) -> TripState:
     if not result.success:
         state.errors.append(f"Policy Agent failed: {result.message}")
     
+    return state
+
+
+async def slot_filling_node(state: TripState) -> TripState:
+    """
+    Fills destination/duration_days/budget/travelers/interests from the raw
+    user_input text via the LLM, for requests that only sent free text (the
+    chat UI never sends structured fields). Only fills gaps - never
+    overwrites values already provided explicitly.
+    """
+    from app.utils.slot_filling import fill_missing_slots
+
+    await fill_missing_slots(state)
+    state.completed_steps.append("slot_filling")
     return state
 
 
@@ -68,32 +81,27 @@ async def calendar_check_node(state: TripState) -> TripState:
 
 async def weather_disaster_node(state: TripState) -> TripState:
     """
-    Fetch weather and disaster data concurrently via asyncio.gather, inside a
-    single graph node.
+    Fetch weather and disaster data via ContextAgent, which resolves the
+    destination's coordinates once and fetches both concurrently internally
+    (see context_agent.py - merged from what were previously separate
+    WeatherAgent/DisasterAgent classes).
 
     TripState is a plain Pydantic model with no reducers on its fields, so
     two graph-level edges converging on the same downstream node (e.g. both
     weather_check_node and disaster_check_node -> recommendation_agent) is
     unsafe in LangGraph: it either runs the downstream node twice or raises
     a concurrent-update conflict when both branches complete in the same
-    super-step. Running both agents concurrently *inside* one node sidesteps
-    that entirely -- there's only ever a single edge into recommendation_agent.
+    super-step. A single node calling one combined agent sidesteps that
+    entirely -- there's only ever a single edge into recommendation_agent.
     """
-    from app.workflows.weather_agent import WeatherAgent
-    from app.workflows.disaster_agent import DisasterAgent
+    from app.workflows.context_agent import ContextAgent
 
-    weather_result, disaster_result = await asyncio.gather(
-        WeatherAgent().execute(state),
-        DisasterAgent().execute(state),
-    )
+    result = await ContextAgent().execute(state)
 
-    # WeatherAgent/DisasterAgent.execute already append their own step names
+    # ContextAgent.execute already appends "weather_agent"/"disaster_agent"
     # to completed_steps.
-    if not weather_result.success:
-        state.errors.append(f"Weather Agent failed: {weather_result.message}")
-
-    if not disaster_result.success:
-        state.errors.append(f"Disaster Agent failed: {disaster_result.message}")
+    if not result.success:
+        state.errors.append(f"Weather/Disaster Agent failed: {result.message}")
 
     return state
 
@@ -111,49 +119,51 @@ def route_to_recommendation(state: TripState) -> str:
 
 async def recommendation_agent_node(state: TripState) -> TripState:
     """
-    Call RecommendationAgent to fetch and rank attractions/hotels/restaurants.
+    Call RecommendationAgent to curate hotels/restaurants/attractions/events
+    AND build the day-by-day itinerary in one LLM call (merged with what was
+    previously a separate PlanningAgent call - see recommendation_agent.py's
+    docstring for why that merge is safe here: every input PlanningAgent
+    needed, e.g. weather/disaster, is already on `state` by this point in
+    the graph). PlanningAgent itself still exists standalone for cases that
+    want to re-plan without re-curating (e.g. a "regenerate itinerary" action).
     """
     from app.workflows.recommendation_agent import RecommendationAgent
-    
+
     agent = RecommendationAgent()
     result = await agent.execute(state)
-    
+
     if result.success:
         state.completed_steps.append("recommendation_agent")
     else:
         state.errors.append(f"Recommendation Agent failed: {result.message}")
-    
-    return state
 
-
-async def planning_agent_node(state: TripState) -> TripState:
-    """
-    Call PlanningAgent to build day-by-day itinerary.
-    """
-    from app.workflows.planning_agent import PlanningAgent
-    
-    agent = PlanningAgent()
-    result = await agent.execute(state)
-    
-    if result.success:
-        state.completed_steps.append("planning_agent")
-    else:
-        state.errors.append(f"Planning Agent failed: {result.message}")
-    
     return state
 
 
 def finalize_response(state: TripState) -> TripState:
     """
     Format final response for user.
+
+    state.errors mixes hard failures with advisory notices (PolicyAgent
+    prefixes non-blocking notices with "[WARNING]" - e.g. a low budget, or
+    collecting a start location - see policy_agent.py). Only genuine
+    failures should mark the whole plan as failed; if a real itinerary was
+    still produced, show it with the advisories attached as notes instead of
+    discarding a successful plan over a benign warning.
     """
-    if state.errors:
-        state.final_response = f"Planning failed with errors: {'; '.join(state.errors)}"
+    hard_failures = [e for e in state.errors if not e.startswith("[WARNING]")]
+    warnings = [e for e in state.errors if e.startswith("[WARNING]")]
+
+    if hard_failures and not state.itinerary:
+        state.final_response = f"Planning failed with errors: {'; '.join(hard_failures)}"
     elif state.itinerary:
         state.final_response = format_itinerary_response(state)
+        notes = hard_failures + warnings
+        if notes:
+            state.final_response += f"\n\n**Notes:** {'; '.join(notes)}"
     else:
         state.final_response = "No itinerary could be generated."
-    
+
     state.completed_steps.append("finalize")
     return state
 
@@ -204,11 +214,12 @@ def build_orchestrator_graph() -> StateGraph:
     Flow:
     1. validate_input
     2. policy_check_node
-    3. location_resolver_node
-    4. calendar_check_node
-    5. weather_disaster_node (weather + disaster fetched concurrently via asyncio.gather)
-    6. recommendation_agent_node
-    7. planning_agent_node
+    3. slot_filling_node (LLM extracts destination/duration/budget/etc. from free text)
+    4. location_resolver_node
+    5. calendar_check_node
+    6. weather_disaster_node (weather + disaster fetched concurrently via asyncio.gather)
+    7. recommendation_agent_node (curates candidates AND builds the itinerary
+       in one LLM call - see recommendation_agent.py's docstring)
     8. finalize_response
     """
     graph = StateGraph(TripState)
@@ -216,22 +227,22 @@ def build_orchestrator_graph() -> StateGraph:
     # Add nodes
     graph.add_node("validate_input", validate_input)
     graph.add_node("policy_check_node", policy_check_node)
+    graph.add_node("slot_filling_node", slot_filling_node)
     graph.add_node("location_resolver_node", location_resolver_node)
     graph.add_node("calendar_check_node", calendar_check_node)
     graph.add_node("weather_disaster_node", weather_disaster_node)
     graph.add_node("recommendation_agent", recommendation_agent_node)
-    graph.add_node("planning_agent", planning_agent_node)
     graph.add_node("finalize_response", finalize_response)
     graph.add_node("error", finalize_response)  # Error handler
 
     # Add edges - sequential flow
-    graph.add_edge("policy_check_node", "location_resolver_node")
+    graph.add_edge("policy_check_node", "slot_filling_node")
+    graph.add_edge("slot_filling_node", "location_resolver_node")
     graph.add_edge("location_resolver_node", "calendar_check_node")
     graph.add_edge("calendar_check_node", "weather_disaster_node")
 
-    # Then planning and finalize
-    graph.add_edge("recommendation_agent", "planning_agent")
-    graph.add_edge("planning_agent", "finalize_response")
+    # recommendation_agent now produces the itinerary too - straight to finalize.
+    graph.add_edge("recommendation_agent", "finalize_response")
 
     # Set entry point
     graph.set_entry_point("validate_input")

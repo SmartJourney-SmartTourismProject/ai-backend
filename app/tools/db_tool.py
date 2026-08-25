@@ -1,8 +1,10 @@
 
 
 import logging
-import os
-from typing import List, Optional
+import struct
+from typing import List, Optional, Tuple
+
+from app.config.settings import settings
 
 # Try to import supabase, but make it optional for testing
 try:
@@ -16,21 +18,82 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # --- Configuration -------------------------------------------------------
-# Fail gracefully if config is missing (use mock data for testing)
-_SUPABASE_URL = os.environ.get("SUPABASE_URL")
-_SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# Read via app.config.settings (pydantic-settings loads .env itself) rather
+# than os.environ directly - nothing in this app calls load_dotenv(), so
+# os.environ.get("SUPABASE_URL") was always None and this tool silently ran
+# on mock data only, regardless of what was configured in .env.
 
-_client: Optional[AsyncClient] = None
+_client: Optional["AsyncClient"] = None
 
 
-async def _get_client() -> Optional[AsyncClient]:
+async def _get_client() -> Optional["AsyncClient"]:
     """Lazily create and cache a single AsyncClient for the process."""
     global _client
-    if not _SUPABASE_AVAILABLE or not _SUPABASE_URL or not _SUPABASE_KEY:
+    if not _SUPABASE_AVAILABLE or not settings.supabase_url or not settings.supabase_key:
         return None
     if _client is None:
-        _client = await acreate_client(_SUPABASE_URL, _SUPABASE_KEY)
+        _client = await acreate_client(settings.supabase_url, settings.supabase_key)
     return _client
+
+
+async def _resolve_id(client: "AsyncClient", table: str, name: str) -> Optional[str]:
+    """Looks up a row's id by (case-insensitive) name in `district` or `category`."""
+    try:
+        resp = await client.table(table).select("id").ilike("name", name).limit(1).execute()
+        if resp.data:
+            return resp.data[0]["id"]
+    except Exception as e:
+        logger.warning(f"Failed to resolve {table} id for '{name}': {e}")
+    return None
+
+
+def _parse_ewkb_point(hex_str: Optional[str]) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Decodes a PostGIS EWKB Point hex string (as returned for a
+    geography(Point,4326) column) into (lat, lon). Format: 1 byte byte-order,
+    4 bytes type+SRID-flag, 4 bytes SRID, then two 8-byte doubles (X=lon, Y=lat).
+    """
+    if not hex_str:
+        return None, None
+    try:
+        raw = bytes.fromhex(hex_str)
+        fmt = "<" if raw[0] == 1 else ">"
+        x, y = struct.unpack_from(fmt + "dd", raw, 9)
+        return y, x
+    except Exception:
+        return None, None
+
+
+def _row_to_listing_dict(row: dict) -> dict:
+    """Maps a real `travel_listing` row onto the §4 contract shape."""
+    lat, lon = _parse_ewkb_point(row.get("location"))
+    return {
+        "id": row.get("id"),
+        "name": row.get("name"),
+        "description": row.get("description"),
+        "price_range": row.get("price_range"),
+        "lat": lat,
+        "lon": lon,
+        "rating": row.get("rating"),
+        "photo_url": row.get("photo_url"),
+        "opening_hours": row.get("opening_hours"),
+        "has_public_transit": row.get("has_public_transit", False),
+        "nearest_transit_stop": row.get("nearest_transit_stop"),
+        "pickme_available": row.get("pickme_available", False),
+    }
+
+
+def _row_to_event_dict(row: dict) -> dict:
+    """Maps a real `local_event` row onto the §4 contract shape."""
+    return {
+        "id": row.get("id"),
+        "name": row.get("name"),
+        "description": row.get("description"),
+        "start_datetime": row.get("start_datetime"),
+        "end_datetime": row.get("end_datetime"),
+        "venue_name": row.get("venue_name"),
+        "price_info": row.get("price_info"),
+    }
 
 
 # --- Mock Data for Testing -----------------------------------------------
@@ -149,21 +212,25 @@ async def _get_listings(
     Tries Supabase first, falls back to mock data.
     """
     # Try Supabase if available
-    if _SUPABASE_AVAILABLE and _SUPABASE_URL and _SUPABASE_KEY:
+    if _SUPABASE_AVAILABLE and settings.supabase_url and settings.supabase_key:
         try:
             client = await _get_client()
             if client:
-                query = (
-                    client.table("listings")
-                    .select("*")
-                    .ilike("destination", destination)
-                    .eq("category", category)
-                )
-                if interests:
-                    query = query.overlaps("interests", interests)
-                response = await query.execute()
-                if response.data:
-                    return response.data
+                district_id = await _resolve_id(client, "district", destination)
+                category_id = await _resolve_id(client, "category", category)
+                if district_id and category_id:
+                    # Real schema has no per-listing "interests" column yet,
+                    # so `interests` only filters the mock-data fallback below.
+                    response = await (
+                        client.table("travel_listing")
+                        .select("*")
+                        .eq("district_id", district_id)
+                        .eq("category_id", category_id)
+                        .eq("is_verified", True)
+                        .execute()
+                    )
+                    if response.data:
+                        return [_row_to_listing_dict(r) for r in response.data]
         except Exception as e:
             logger.warning(f"Supabase query failed, using mock data: {e}")
     
@@ -195,20 +262,23 @@ async def get_events(destination: str, start_date: str, end_date: str) -> List[d
     Returns events in destination whose window overlaps [start_date, end_date].
     Falls back to mock data if Supabase unavailable.
     """
-    if _SUPABASE_AVAILABLE and _SUPABASE_URL and _SUPABASE_KEY:
+    if _SUPABASE_AVAILABLE and settings.supabase_url and settings.supabase_key:
         try:
             client = await _get_client()
             if client:
-                response = (
-                    await client.table("events")
-                    .select("*")
-                    .ilike("destination", destination)
-                    .lte("start_datetime", end_date)
-                    .gte("end_datetime", start_date)
-                    .execute()
-                )
-                if response.data:
-                    return response.data
+                district_id = await _resolve_id(client, "district", destination)
+                if district_id:
+                    response = await (
+                        client.table("local_event")
+                        .select("*")
+                        .eq("district_id", district_id)
+                        .eq("is_verified", True)
+                        .lte("start_datetime", end_date)
+                        .gte("end_datetime", start_date)
+                        .execute()
+                    )
+                    if response.data:
+                        return [_row_to_event_dict(r) for r in response.data]
         except Exception as e:
             logger.warning(f"Supabase events query failed, using mock data: {e}")
     

@@ -131,13 +131,15 @@ class PolicyAgent(BaseAgent):
         """Validate budget constraints."""
         violations = []
         warnings = []
-        
+
         if budget < self.MIN_BUDGET:
-            violations.append(
-                f"Budget ${budget} is below minimum recommended ${self.MIN_BUDGET}. "
-                "Trip planning may be limited."
+            # Advisory, not a hard block: a low budget narrows the options the
+            # Planning Agent can choose from, it doesn't make the request invalid.
+            warnings.append(
+                f"Budget ${budget} is below the recommended minimum of ${self.MIN_BUDGET}. "
+                "Trip planning may be limited to budget-friendly options."
             )
-        
+
         if budget > self.MAX_BUDGET:
             violations.append(
                 f"Budget ${budget} exceeds maximum allowed ${self.MAX_BUDGET}."

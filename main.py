@@ -15,6 +15,15 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
+
+# Must run before any other app import: app.config.settings reads .env via
+# pydantic-settings for its own Settings fields, but that never populates
+# os.environ - libraries that read env vars directly (e.g. langchain_google_genai's
+# ChatGoogleGenerativeAI, which needs GOOGLE_API_KEY/GEMINI_API_KEY in os.environ)
+# would otherwise fail at runtime even with a correctly filled-in .env.
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -112,8 +121,7 @@ async def health_check() -> HealthResponse:
             "calendar_agent",
             "weather_agent",
             "disaster_agent",
-            "recommendation_agent",
-            "planning_agent",
+            "recommendation_agent",  # also builds the itinerary - see recommendation_agent.py
         ],
     )
 
@@ -136,10 +144,15 @@ async def plan_trip(request: PlanTripRequest) -> PlanTripResponse:
         
         # Run the graph
         result = await graph.ainvoke(state)
-        
-        # Extract final state from result
-        # LangGraph returns the final state object
-        final_state = result if isinstance(result, TripState) else state
+
+        # Extract final state from result.
+        # graph.ainvoke() always returns a plain dict here, never a TripState
+        # instance - falling back to the original pre-graph `state` on a dict
+        # result would silently discard everything the graph computed
+        # (weather, disaster, itinerary, errors) and return the empty input
+        # state instead. Reconstruct a TripState from the dict so the real
+        # result is what gets returned.
+        final_state = result if isinstance(result, TripState) else TripState(**result)
         
         return PlanTripResponse(
             success=len(final_state.errors) == 0,
@@ -191,23 +204,23 @@ async def list_agents() -> Dict[str, Any]:
             },
             {
                 "name": "weather_agent",
-                "description": "Weather forecast fetching (OpenWeather)",
+                "description": "Weather forecast fetching (OpenWeather) - part of ContextAgent, see context_agent.py",
                 "status": "active",
             },
             {
                 "name": "disaster_agent",
-                "description": "Disaster alert monitoring (EONET/USGS/GDACS)",
+                "description": "Disaster alert monitoring (EONET/USGS/GDACS) - part of ContextAgent, see context_agent.py",
                 "status": "active",
             },
             {
                 "name": "recommendation_agent",
-                "description": "RAG-based listing curation",
+                "description": "RAG-based listing curation + itinerary assembly with budget constraints (one combined LLM call)",
                 "status": "active",
             },
             {
                 "name": "planning_agent",
-                "description": "Itinerary assembly with budget constraints",
-                "status": "active",
+                "description": "Standalone itinerary re-planning from existing recommendations - not called by the default trip-plan graph (merged into recommendation_agent to save an LLM call per request)",
+                "status": "standalone",
             },
             {
                 "name": "calendar_agent",
