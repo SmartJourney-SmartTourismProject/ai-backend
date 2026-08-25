@@ -22,3 +22,10 @@ which makes get_free_days() fall through to [] (its designed no-calendar
 fallback) — so nothing is blocked, but calendar integration won't
 actually persist across sessions until this table exists.
 
+## Member A note: Gemini model name updated
+
+app/utils/slot_filling.py now uses "gemini-3.6-flash" instead of
+"gemini-2.5-flash" — the 2.5 model returned a 404 (no longer available
+to new API keys). If Recommendation/Planner agents reference
+gemini-2.5-flash or another deprecated model name anywhere, worth
+checking and updating those too.
