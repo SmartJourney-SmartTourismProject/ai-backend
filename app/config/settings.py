@@ -11,15 +11,18 @@ class Settings(BaseSettings):
     """Application settings loaded from .env file."""
 
     # ===== LLM & AI Configuration =====
-    google_api_key: str = ""  # Gemini API key (required for LLM, optional for testing)
-    llm_model: str = "gemini-3.6-flash"  # gemini-2.0-flash was retired by Google (404 on live calls)
+    # Field name matches app/utils/slot_filling.py's `settings.gemini_api_key`.
+    # Defaults to "" (not required) so importing this module without a .env
+    # doesn't raise ValidationError - e.g. in CI or on a teammate's fresh clone.
+    gemini_api_key: str = ""
+    llm_model: str = "gemini-3.6-flash"  # gemini-2.0-flash/2.5-flash were retired/404 for new keys
     llm_temperature: float = 0.2
     llm_max_tokens: int = 2048
 
     # ===== Database Configuration =====
     supabase_url: str = ""
     supabase_key: str = ""
-    database_url: str = ""  # PostgreSQL connection string
+    database_url: str = ""  # PostgreSQL connection string; matters once Supabase is wired in
 
     # ===== External API Keys =====
     openweather_api_key: str = ""
@@ -28,6 +31,7 @@ class Settings(BaseSettings):
     yelp_fusion_api_key: str = ""
     google_calendar_client_id: str = ""
     google_calendar_client_secret: str = ""
+    google_calendar_redirect_uri: str = "http://localhost:8000/auth/google/callback"
     booking_rapidapi_key: str = ""  # RapidAPI key for Booking.com (real hotel nightly prices)
     booking_rapidapi_host: str = "booking-com15.p.rapidapi.com"
 

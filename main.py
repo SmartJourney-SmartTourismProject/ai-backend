@@ -1,28 +1,22 @@
 """
 FastAPI server for SmartJourney AI Backend.
-Provides REST API endpoints for trip planning with multi-agent system.
+
+Mounts both tracks on one app:
+  - Member A's Orchestrator track: trip planning (`app/api/trip.py`) and
+    Google Calendar OAuth (`app/api/google_oauth.py`).
+  - Member B's data/RAG track: RAG indexing and the data-pipeline admin
+    triggers/scheduler below.
 
 Endpoints:
-  POST /api/plan-trip - Main endpoint for trip planning
-  GET  /api/health  - Health check
-  POST /api/rag/index - Index new data into RAG store
-  GET  /api/agents - List available agents
-
-NOTE: this file previously called a `get_orchestrator_graph()` built out of
-this branch's own `app/workflows/orchestrator.py` (plus a `policy_agent.py`,
-`calendar_agent.py`, and `context_agent.py`). Those were all a duplicate,
-independent re-implementation of Member A's Orchestrator track (router agent,
-policy guard, location/calendar/weather/disaster tools) - see
-CLEANUP_PLAN.md and MEMBER_A_INTEGRATION_TODO.md for why they were removed.
-
-Until Member A's real `app/core/orchestrator.py` (plus her `app/tools/*` and
-`app/utils/*`) lands on this branch, `/api/plan-trip` below calls
-RecommendationAgent directly - it curates candidates AND builds the
-itinerary in one LLM call (see recommendation_agent.py) - skipping the
-validate/policy/location/calendar/weather/disaster steps that are Member A's
-job. Caller must supply `destination` (and may supply `weather`/`disaster`)
-directly since nothing here resolves them. Swap this for a call into her
-orchestrator once it's merged; see MEMBER_A_INTEGRATION_TODO.md.
+  POST /trip-plan            - Orchestrator: full validate/policy/slot-fill/
+                                location/calendar/context/recommend/plan flow
+  GET  /auth/google/login,
+  GET  /auth/google/callback - Google Calendar OAuth consent flow
+  GET  /                     - Health check
+  GET  /api/health           - Health check (detailed)
+  POST /api/rag/index        - Index new data into the RAG store
+  POST /api/admin/sync/events    - Trigger the events ingestion job
+  POST /api/admin/sync/listings  - Trigger the listings ingestion job
 """
 from __future__ import annotations
 
@@ -42,10 +36,10 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from app.core.state import TripState
-from app.workflows.recommendation_agent import RecommendationAgent
+from app.api.trip import router as trip_router
+from app.api.google_oauth import router as google_oauth_router
 from app.rag.rag_service import rag_service
 from app.scheduler import start_scheduler, stop_scheduler
 from app.data import events_ingest, overpass_ingest
@@ -53,14 +47,12 @@ from app.data import events_ingest, overpass_ingest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
 app = FastAPI(
-    title="SmartJourney AI Backend",
+    title="Smart Tourism Assistant — AI Backend",
     description="Multi-agent travel planning system with RAG and LangGraph",
     version="2.0.0",
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -69,33 +61,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ------------------- Request/Response Models -------------------
-
-class PlanTripRequest(BaseModel):
-    user_input: str
-    destination: Optional[str] = None
-    duration_days: Optional[int] = Field(default=None, ge=1, le=180)
-    budget: Optional[float] = Field(default=None, ge=0)
-    travelers: Optional[int] = Field(default=None, ge=1, le=50)
-    user_id: Optional[str] = None
-    interests: List[str] = Field(default_factory=list)
-    travel_style: Optional[str] = None
-    start_location: Optional[dict] = None
-    trip_dates: Optional[List[dict]] = None
-    language: str = "en"
-
-
-class PlanTripResponse(BaseModel):
-    success: bool
-    final_response: Optional[str] = None
-    errors: List[str] = Field(default_factory=list)
-    completed_steps: List[str] = Field(default_factory=list)
-    itinerary: List[dict] = Field(default_factory=list)
-    recommendations: List[dict] = Field(default_factory=list)
-    weather: Optional[dict] = None
-    disaster: Optional[dict] = None
-    estimated_cost: Optional[float] = None
+app.include_router(trip_router)
+app.include_router(google_oauth_router)
 
 
 class IndexDataRequest(BaseModel):
@@ -103,66 +70,17 @@ class IndexDataRequest(BaseModel):
     destination: Optional[str] = None
 
 
-class HealthResponse(BaseModel):
-    status: str
-    version: str
-    agents_available: List[str]
-
-
 # ------------------- API Endpoints -------------------
 
-@app.get("/api/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "smart-tourism-ai-backend"}
+
+
+@app.get("/api/health")
+async def health_check() -> Dict[str, Any]:
     """Health check endpoint."""
-    return HealthResponse(
-        status="healthy",
-        version="2.0.0",
-        agents_available=[
-            "recommendation_agent",  # also builds the itinerary - see recommendation_agent.py
-            "planning_agent",  # standalone re-planning, not on this endpoint's path
-        ],
-    )
-
-
-@app.post("/api/plan-trip", response_model=PlanTripResponse)
-async def plan_trip(request: PlanTripRequest) -> PlanTripResponse:
-    """
-    Trip planning endpoint - Member B's scope only (see module docstring).
-
-    Calls RecommendationAgent directly: curates candidates from db_tool/RAG
-    and builds the itinerary in one LLM call. `request.destination` is
-    required - there is no policy/location/calendar/weather/disaster
-    resolution here, that's Member A's Orchestrator track. Pass `weather`/
-    `disaster` in the request body if you want them considered.
-    """
-    try:
-        state = TripState(**request.dict())
-
-        if not state.destination:
-            raise HTTPException(
-                status_code=422,
-                detail="destination is required (no Orchestrator on this branch to resolve/ask for it)",
-            )
-
-        result = await RecommendationAgent().execute(state)
-
-        return PlanTripResponse(
-            success=result.success,
-            final_response=state.final_response,
-            errors=state.errors,
-            completed_steps=state.completed_steps,
-            itinerary=state.itinerary,
-            recommendations=state.recommendations,
-            weather=state.weather,
-            disaster=state.disaster,
-            estimated_cost=state.estimated_cost,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Trip planning failed: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+    return {"status": "healthy", "version": "2.0.0"}
 
 
 @app.post("/api/rag/index")
@@ -186,30 +104,10 @@ async def index_rag_data(request: IndexDataRequest):
         raise HTTPException(status_code=500, detail=f"Indexing error: {str(e)}")
 
 
-@app.get("/api/agents")
-async def list_agents() -> Dict[str, Any]:
-    """List available agents and their status."""
-    return {
-        "agents": [
-            {
-                "name": "recommendation_agent",
-                "description": "RAG-based listing curation + itinerary assembly with budget constraints (one combined LLM call)",
-                "status": "active",
-            },
-            {
-                "name": "planning_agent",
-                "description": "Standalone itinerary re-planning from existing recommendations - not called by the default trip-plan endpoint (merged into recommendation_agent to save an LLM call per request)",
-                "status": "standalone",
-            },
-        ],
-        "orchestrator": "none on this branch - policy/location/calendar/weather/disaster routing is Member A's Orchestrator track, see MEMBER_A_INTEGRATION_TODO.md",
-    }
-
-
 @app.post("/api/admin/sync/events")
 async def trigger_events_sync():
     """
-    Manually trigger the weekly events sync (Ticketmaster/Eventbrite, all districts).
+    Manually trigger the weekly events sync (Ticketmaster, all districts).
     Runs in a background thread and returns immediately - the sync itself takes
     several minutes across 25 districts; check server logs for completion.
     """
@@ -230,7 +128,7 @@ async def trigger_listings_sync():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize the automated data-refresh scheduler on startup."""
+    """Start the automated data-refresh scheduler on startup."""
     logger.info("Starting SmartJourney AI Backend...")
     start_scheduler()
     logger.info("Ready to serve requests")
@@ -244,10 +142,10 @@ async def shutdown_event():
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     port = int(os.environ.get("API_PORT", "8000"))
     host = os.environ.get("API_HOST", "0.0.0.0")
-    
+
     uvicorn.run(
         "main:app",
         host=host,
