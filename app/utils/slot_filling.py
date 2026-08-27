@@ -28,7 +28,12 @@ class _ExtractedSlots(BaseModel):
         None, description="Total number of travelers including the user, if mentioned or inferable (e.g. 'my wife and kid' = 3). Null if not mentioned."
     )
     interests: List[str] = Field(
-        default_factory=list, description="List of travel interests/activity types mentioned (e.g. 'nature', 'food', 'history'). Empty list if none mentioned."
+        default_factory=list,
+        description=(
+            "List of travel interests/activity types mentioned, as short, "
+            "singular, lowercase tags (e.g. 'beach' not 'beaches', 'hike' not "
+            "'hiking trips'). Empty list if none mentioned."
+        ),
     )
 
 
@@ -47,7 +52,10 @@ particular:
 
 If a field is not mentioned, leave it null (or an empty list for
 interests) — do not use a "reasonable default." A missing value is the
-correct output when the user didn't say anything about that field."""
+correct output when the user didn't say anything about that field.
+
+When listing interests, use short singular lowercase tags (e.g. "beach",
+"hike", "culture") - not plurals or full phrases."""
 
 
 async def fill_slots(state: TripState) -> TripState:
