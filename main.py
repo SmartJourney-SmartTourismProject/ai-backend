@@ -7,6 +7,22 @@ Endpoints:
   GET  /api/health  - Health check
   POST /api/rag/index - Index new data into RAG store
   GET  /api/agents - List available agents
+
+NOTE: this file previously called a `get_orchestrator_graph()` built out of
+this branch's own `app/workflows/orchestrator.py` (plus a `policy_agent.py`,
+`calendar_agent.py`, and `context_agent.py`). Those were all a duplicate,
+independent re-implementation of Member A's Orchestrator track (router agent,
+policy guard, location/calendar/weather/disaster tools) - see
+CLEANUP_PLAN.md and MEMBER_A_INTEGRATION_TODO.md for why they were removed.
+
+Until Member A's real `app/core/orchestrator.py` (plus her `app/tools/*` and
+`app/utils/*`) lands on this branch, `/api/plan-trip` below calls
+RecommendationAgent directly - it curates candidates AND builds the
+itinerary in one LLM call (see recommendation_agent.py) - skipping the
+validate/policy/location/calendar/weather/disaster steps that are Member A's
+job. Caller must supply `destination` (and may supply `weather`/`disaster`)
+directly since nothing here resolves them. Swap this for a call into her
+orchestrator once it's merged; see MEMBER_A_INTEGRATION_TODO.md.
 """
 from __future__ import annotations
 
@@ -29,7 +45,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.core.state import TripState
-from app.workflows.orchestrator import get_orchestrator_graph
+from app.workflows.recommendation_agent import RecommendationAgent
 from app.rag.rag_service import rag_service
 from app.scheduler import start_scheduler, stop_scheduler
 from app.data import events_ingest, overpass_ingest
@@ -52,9 +68,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Global orchestrator graph instance
-_orchestrator = None
 
 
 # ------------------- Request/Response Models -------------------
@@ -96,32 +109,17 @@ class HealthResponse(BaseModel):
     agents_available: List[str]
 
 
-# ------------------- Helper Functions -------------------
-
-def get_orchestrator():
-    """Get or create the orchestrator graph instance."""
-    global _orchestrator
-    if _orchestrator is None:
-        _orchestrator = get_orchestrator_graph()
-        logger.info("Orchestrator graph initialized")
-    return _orchestrator
-
-
 # ------------------- API Endpoints -------------------
 
 @app.get("/api/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     """Health check endpoint."""
     return HealthResponse(
-        status="healthy" if _orchestrator is not None else "initializing",
+        status="healthy",
         version="2.0.0",
         agents_available=[
-            "policy_agent",
-            "location_resolver",
-            "calendar_agent",
-            "weather_agent",
-            "disaster_agent",
             "recommendation_agent",  # also builds the itinerary - see recommendation_agent.py
+            "planning_agent",  # standalone re-planning, not on this endpoint's path
         ],
     )
 
@@ -129,43 +127,39 @@ async def health_check() -> HealthResponse:
 @app.post("/api/plan-trip", response_model=PlanTripResponse)
 async def plan_trip(request: PlanTripRequest) -> PlanTripResponse:
     """
-    Main trip planning endpoint.
-    
-    Processes user request through multi-agent orchestration:
-    validate → policy → location → calendar → weather/disaster → 
-    recommendation → planning → finalize
+    Trip planning endpoint - Member B's scope only (see module docstring).
+
+    Calls RecommendationAgent directly: curates candidates from db_tool/RAG
+    and builds the itinerary in one LLM call. `request.destination` is
+    required - there is no policy/location/calendar/weather/disaster
+    resolution here, that's Member A's Orchestrator track. Pass `weather`/
+    `disaster` in the request body if you want them considered.
     """
     try:
-        # Create TripState
         state = TripState(**request.dict())
-        
-        # Get orchestrator graph
-        graph = get_orchestrator()
-        
-        # Run the graph
-        result = await graph.ainvoke(state)
 
-        # Extract final state from result.
-        # graph.ainvoke() always returns a plain dict here, never a TripState
-        # instance - falling back to the original pre-graph `state` on a dict
-        # result would silently discard everything the graph computed
-        # (weather, disaster, itinerary, errors) and return the empty input
-        # state instead. Reconstruct a TripState from the dict so the real
-        # result is what gets returned.
-        final_state = result if isinstance(result, TripState) else TripState(**result)
-        
+        if not state.destination:
+            raise HTTPException(
+                status_code=422,
+                detail="destination is required (no Orchestrator on this branch to resolve/ask for it)",
+            )
+
+        result = await RecommendationAgent().execute(state)
+
         return PlanTripResponse(
-            success=len(final_state.errors) == 0,
-            final_response=final_state.final_response,
-            errors=final_state.errors,
-            completed_steps=final_state.completed_steps,
-            itinerary=final_state.itinerary,
-            recommendations=final_state.recommendations,
-            weather=final_state.weather,
-            disaster=final_state.disaster,
-            estimated_cost=final_state.estimated_cost,
+            success=result.success,
+            final_response=state.final_response,
+            errors=state.errors,
+            completed_steps=state.completed_steps,
+            itinerary=state.itinerary,
+            recommendations=state.recommendations,
+            weather=state.weather,
+            disaster=state.disaster,
+            estimated_cost=state.estimated_cost,
         )
-    
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Trip planning failed: %s", str(e))
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
@@ -198,37 +192,17 @@ async def list_agents() -> Dict[str, Any]:
     return {
         "agents": [
             {
-                "name": "policy_agent",
-                "description": "Policy guardrails and validation",
-                "status": "active",
-            },
-            {
-                "name": "weather_agent",
-                "description": "Weather forecast fetching (OpenWeather) - part of ContextAgent, see context_agent.py",
-                "status": "active",
-            },
-            {
-                "name": "disaster_agent",
-                "description": "Disaster alert monitoring (EONET/USGS/GDACS) - part of ContextAgent, see context_agent.py",
-                "status": "active",
-            },
-            {
                 "name": "recommendation_agent",
                 "description": "RAG-based listing curation + itinerary assembly with budget constraints (one combined LLM call)",
                 "status": "active",
             },
             {
                 "name": "planning_agent",
-                "description": "Standalone itinerary re-planning from existing recommendations - not called by the default trip-plan graph (merged into recommendation_agent to save an LLM call per request)",
+                "description": "Standalone itinerary re-planning from existing recommendations - not called by the default trip-plan endpoint (merged into recommendation_agent to save an LLM call per request)",
                 "status": "standalone",
             },
-            {
-                "name": "calendar_agent",
-                "description": "Google Calendar integration for free dates",
-                "status": "active",
-            },
         ],
-        "orchestrator": "LangGraph StateGraph",
+        "orchestrator": "none on this branch - policy/location/calendar/weather/disaster routing is Member A's Orchestrator track, see MEMBER_A_INTEGRATION_TODO.md",
     }
 
 
@@ -256,9 +230,8 @@ async def trigger_listings_sync():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize orchestrator and the automated data-refresh scheduler on startup."""
+    """Initialize the automated data-refresh scheduler on startup."""
     logger.info("Starting SmartJourney AI Backend...")
-    get_orchestrator()
     start_scheduler()
     logger.info("Ready to serve requests")
 

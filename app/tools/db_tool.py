@@ -5,6 +5,7 @@ import struct
 from typing import List, Optional, Tuple
 
 from app.config.settings import settings
+from app.data.sri_lanka_districts import get_district
 
 # Try to import supabase, but make it optional for testing
 try:
@@ -182,11 +183,30 @@ _MOCK_EVENTS = {
 }
 
 
+# Mock destinations above that aren't themselves one of the 25 official
+# districts (Ella is a town inside Badulla district) - kept only for
+# backfilling lat/lon onto the hand-written mock rows.
+_MOCK_TOWN_COORDS = {"ella": {"lat": 6.8658, "lon": 81.0467}}
+
+
 def _get_mock_data(data_dict: dict, destination: str, interests: Optional[List[str]] = None) -> List[dict]:
     """Get mock data for a destination, optionally filtered by interests."""
     dest_key = destination.lower().strip()
     items = data_dict.get(dest_key, [])
-    
+
+    # The §4 contract requires "lat"/"lon" on every listing dict (Recommendation/
+    # Planner use them for travel-time reasoning), but the hand-written mock
+    # entries above only carry a "destination" name - backfill from the
+    # district centroid (or the town-coords fallback) so mock and real
+    # (Supabase) rows share the same shape.
+    district = get_district(destination) or _MOCK_TOWN_COORDS.get(dest_key)
+    if district:
+        items = [
+            item if ("lat" in item and "lon" in item)
+            else {**item, "lat": district["lat"], "lon": district["lon"]}
+            for item in items
+        ]
+
     if interests:
         # Filter by interests overlap
         interest_set = set(i.lower() for i in interests)
