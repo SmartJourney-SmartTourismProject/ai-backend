@@ -9,7 +9,7 @@ Needed: a new table, e.g. `google_oauth_tokens`, with at minimum:
 - access_token
 - refresh_token
 - token_expiry
-- scope
+- Scope
 
 And two functions added to db_tool.py (or wherever DB access lives),
 matching this signature so calendar_tool.py doesn't need to change:
