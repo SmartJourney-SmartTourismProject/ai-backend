@@ -18,7 +18,13 @@ def test_round_trips_back_to_original_user_id():
 
 def test_tampered_token_is_rejected():
     token = _state_signer.dumps("demo-user-1")
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # Tamper the FIRST character, not the last. The signature is HMAC-SHA1
+    # (20 bytes = 160 bits) encoded as 27 url-safe base64 chars (162 bits),
+    # so the FINAL character carries 2 "don't care" bits - swapping it for
+    # another char in the same equivalence class decodes to identical bytes
+    # and still verifies. Every bit of the first character is significant,
+    # so altering it always invalidates the signature.
+    tampered = ("A" if token[0] != "A" else "B") + token[1:]
     with pytest.raises(BadSignature):
         _state_signer.loads(tampered, max_age=600)
 
