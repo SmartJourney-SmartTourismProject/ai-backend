@@ -1,5 +1,7 @@
 # app/tools/calendar_tool.py
+import json
 from datetime import datetime, timedelta, timezone, date
+from pathlib import Path
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -10,21 +12,38 @@ from app.config.settings import settings
 SCOPES = ["https://www.googleapis.com/auth/calendar.freebusy"]
 
 
-# --- Placeholder credential storage -----------------------------------
-# TODO(Member B): back these with a real DB table (see handoff note).
-# For now, an in-memory dict so calendar_tool.py is fully testable without
-# a real DB — this resets every time the app restarts, which is fine for
-# local dev but not persistence across sessions.
-_FAKE_CREDENTIAL_STORE: dict[str, dict] = {}
+# --- Credential storage -------------------------------------------------
+# TODO(Member B): move this to a real DB table (google_oauth_tokens) once
+# Supabase is wired in - see handoff note in member_B.md. Until then, a
+# local JSON file so tokens survive an app restart instead of resetting
+# every time like the previous in-memory dict did. Not safe for multiple
+# server instances (no locking, no shared storage) - fine for local dev.
+_CREDENTIAL_STORE_PATH = Path(__file__).resolve().parent.parent.parent / "calendar_tokens.json"
+
+
+def _load_store() -> dict:
+    if not _CREDENTIAL_STORE_PATH.exists():
+        return {}
+    try:
+        return json.loads(_CREDENTIAL_STORE_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_store(store: dict) -> None:
+    _CREDENTIAL_STORE_PATH.write_text(json.dumps(store, indent=2))
 
 
 async def get_stored_credentials(user_id: str) -> dict | None:
-    return _FAKE_CREDENTIAL_STORE.get(user_id)
+    return _load_store().get(user_id)
 
 
 async def save_credentials(user_id: str, creds: dict) -> None:
-    _FAKE_CREDENTIAL_STORE[user_id] = creds
+    store = _load_store()
+    store[user_id] = creds
+    _save_store(store)
 # ------------------------------------------------------------------------
+
 
 
 def _creds_dict_to_google_credentials(creds: dict) -> Credentials:

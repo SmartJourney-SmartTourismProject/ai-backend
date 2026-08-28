@@ -10,6 +10,17 @@ async def resolve_start_location(
     Resolve the traveler's starting location.
     Priority: GPS (from client) -> IP geolocation (ip-api.com) -> None.
     A None return tells the Orchestrator to ask the user directly.
+
+    Design notes:
+    - The IP lookup below fails silently (returns None instead of raising) -
+      matches BUILD_PLAN.md §8's error-handling rule: location failures
+      should fall through to asking the user, never crash the graph.
+    - client_gps/client_ip are taken as plain params rather than read off
+      TripState directly, so this function stays testable in isolation
+      (call it with fake GPS/IP values, no TripState needed) - deciding
+      what request data flows in is the Orchestrator's job, not this tool's.
+    - No API key needed for either provider's free tier - nothing to add
+      to settings.py for this tool.
     """
     if client_gps and client_gps.get("lat") is not None and client_gps.get("lon") is not None:
         return {

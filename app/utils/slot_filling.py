@@ -6,6 +6,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config.settings import settings
 from app.core.state import TripState
+from app.tools import db_tool
+
 
 
 class _ExtractedSlots(BaseModel):
@@ -28,7 +30,12 @@ class _ExtractedSlots(BaseModel):
         None, description="Total number of travelers including the user, if mentioned or inferable (e.g. 'my wife and kid' = 3). Null if not mentioned."
     )
     interests: List[str] = Field(
-        default_factory=list, description="List of travel interests/activity types mentioned (e.g. 'nature', 'food', 'history'). Empty list if none mentioned."
+        default_factory=list,
+        description=(
+            "List of travel interests/activity types mentioned, as short, "
+            "singular, lowercase tags (e.g. 'beach' not 'beaches', 'hike' not "
+            "'hiking trips'). Empty list if none mentioned."
+        ),
     )
 
 
@@ -47,7 +54,10 @@ particular:
 
 If a field is not mentioned, leave it null (or an empty list for
 interests) — do not use a "reasonable default." A missing value is the
-correct output when the user didn't say anything about that field."""
+correct output when the user didn't say anything about that field.
+
+When listing interests, use short singular lowercase tags (e.g. "beach",
+"hike", "culture") - not plurals or full phrases."""
 
 
 async def fill_slots(state: TripState) -> TripState:
@@ -84,5 +94,22 @@ async def fill_slots(state: TripState) -> TripState:
 
     except Exception as e:
         state.errors.append(f"slot_filling failed: {e}")
+
+    if state.destination and state.duration_days is None:
+        # Destination-only request: default to 1 day of activities + travel
+        # time, per BUILD_PLAN.md §2, instead of leaving duration unset.
+        state.duration_days = 1
+
+    if state.user_id:
+        profile = await db_tool.get_user_profile(state.user_id)
+        if not state.interests and profile.get("interests"):
+            state.interests = profile["interests"]
+        if state.travel_style is None and profile.get("travel_style"):
+            state.travel_style = profile["travel_style"]
+        if state.budget is None and profile.get("budget"):
+            state.budget = profile["budget"]
+
+    if state.destination is None:
+        state.clarification_needed = "Which destination would you like to visit?"
 
     return state

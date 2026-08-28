@@ -1,5 +1,8 @@
 #Graph Edges validate → policy → location → calendar → context → recommend → plan → respond
 # app/core/orchestrator.py
+import asyncio
+from datetime import datetime, timedelta
+
 from langgraph.graph import StateGraph, END
 
 from app.core.state import TripState
@@ -10,6 +13,9 @@ from app.utils.slot_filling import fill_slots
 from app.tools.location_tool import resolve_start_location
 from app.tools.calendar_tool import get_free_days
 from app.tools.weather_tool import get_weather
+from app.tools.disaster_tool import get_disaster_info
+from app.tools.geocode_tool import geocode_destination
+
 
 # Phase 4 wiring: Member B's real Recommendation/Planner agents, replacing
 # the fixed-dict stubs this file used during Phase 2. RecommendationAgent
@@ -46,6 +52,12 @@ async def _location_node(state: TripState) -> TripState:
         state.completed_steps.append("location")
         return state
 
+    # Deliberately None/None here: this node is a fallback for callers that
+    # invoke the orchestrator directly (tests, scripts) without going
+    # through app/api/trip.py, which already resolves start_location from
+    # the real request before building TripState. In the normal HTTP path,
+    # this branch is never reached because state.start_location is already
+    # set - see the early return above.
     location = await resolve_start_location(client_gps=None, client_ip=None)
     if location:
         state.start_location = location
@@ -63,19 +75,36 @@ async def _calendar_node(state: TripState) -> TripState:
 
 
 async def _context_node(state: TripState) -> TripState:
-    # Weather + disaster would run concurrently here via asyncio.gather.
-    # disaster_tool.py is deprioritized for now — swap in gather() once
-    # it exists:
-    #   weather, disaster = await asyncio.gather(
-    #       get_weather(lat, lon, dates), get_disaster_info(lat, lon)
-    #   )
-    if state.start_location and state.trip_dates:
-        lat = state.start_location["lat"]
-        lon = state.start_location["lon"]
+    if not state.destination:
+        state.completed_steps.append("context")
+        return state
+
+    coords = await geocode_destination(state.destination)
+    if not coords:
+        # Couldn't resolve the destination to coordinates - degrade
+        # gracefully rather than guessing, same as every other tool's
+        # failure mode (BUILD_PLAN.md §8).
+        state.completed_steps.append("context")
+        return state
+
+    lat, lon = coords["lat"], coords["lon"]
+
+    if state.trip_dates:
         dates = [d["start_date"] for d in state.trip_dates]
-        state.weather = await get_weather(lat, lon, dates)
+    else:
+        # No calendar connected - default to today + duration_days (or 1
+        # day) so weather/disaster still get checked for *some* dates.
+        span = state.duration_days or 1
+        today = datetime.utcnow().date()
+        dates = [(today + timedelta(days=i)).isoformat() for i in range(span)]
+
+    state.weather, state.disaster = await asyncio.gather(
+        get_weather(lat, lon, dates),
+        get_disaster_info(lat, lon),
+    )
     state.completed_steps.append("context")
     return state
+
 
 
 async def _recommend_node(state: TripState) -> TripState:
@@ -102,15 +131,33 @@ async def _plan_node(state: TripState) -> TripState:
     return state
 
 
+# Prefixes that mark an error as advisory (degrade gracefully, don't hide
+# a real result behind them) rather than a reason the whole plan failed.
+# Add to this list as more soft-failure paths are identified (see BUILD_PLAN.md §8).
+_SOFT_ERROR_PREFIXES = ("location_unresolved",)
+
+
 async def _respond_node(state: TripState) -> TripState:
-    if state.errors:
-        state.final_response = "Sorry, I ran into an issue: " + "; ".join(state.errors)
+    
+    if state.clarification_needed:
+        state.final_response = state.clarification_needed
+        state.completed_steps.append("respond")
+        return state    
+    
+    hard_errors = [e for e in state.errors if not e.startswith(_SOFT_ERROR_PREFIXES)]
+    soft_notes = [e for e in state.errors if e.startswith(_SOFT_ERROR_PREFIXES)]
+
+    if hard_errors and not state.itinerary:
+        state.final_response = "Sorry, I ran into an issue: " + "; ".join(hard_errors)
     else:
         state.final_response = (
             f"Here's your trip plan for {state.destination or 'your destination'}: "
             f"{len(state.itinerary)} day(s) planned, "
             f"estimated cost {state.estimated_cost}."
         )
+        if soft_notes:
+            state.final_response += "\n\nNote: " + "; ".join(soft_notes)
+
     state.completed_steps.append("respond")
     return state
 
@@ -121,6 +168,10 @@ def _route_after_validate(state: TripState) -> str:
 
 def _route_after_policy(state: TripState) -> str:
     return "slot_fill" if not state.errors else "respond"
+
+def _route_after_slot_fill(state: TripState) -> str:
+    return "respond" if state.clarification_needed else "location"
+
 
 
 def build_orchestrator_graph():
@@ -140,8 +191,8 @@ def build_orchestrator_graph():
 
     graph.add_conditional_edges("validate", _route_after_validate)
     graph.add_conditional_edges("policy", _route_after_policy)
+    graph.add_conditional_edges("slot_fill", _route_after_slot_fill)
 
-    graph.add_edge("slot_fill", "location")
     graph.add_edge("location", "calendar")
     graph.add_edge("calendar", "context")
     graph.add_edge("context", "recommend")
