@@ -1,5 +1,6 @@
 #Graph Edges validate → policy → location → calendar → context → recommend → plan → respond
 # app/core/orchestrator.py
+import asyncio
 from datetime import datetime, timedelta
 
 from langgraph.graph import StateGraph, END
@@ -14,6 +15,9 @@ from app.utils.slot_filling import fill_slots
 from app.tools.location_tool import resolve_start_location
 from app.tools.calendar_tool import get_free_days
 from app.tools.weather_tool import get_weather
+from app.tools.disaster_tool import get_disaster_info
+from app.tools.geocode_tool import geocode_destination
+
 
 
 # --- Stub agents for Recommendation/Planner --------------------------
@@ -88,33 +92,36 @@ async def _calendar_node(state: TripState) -> TripState:
 
 
 async def _context_node(state: TripState) -> TripState:
-    # Weather + disaster would run concurrently here via asyncio.gather.
-    # disaster_tool.py is deprioritized for now — swap in gather() once
-    # it exists:
-    #   weather, disaster = await asyncio.gather(
-    #       get_weather(lat, lon, dates), get_disaster_info(lat, lon)
-    #   )
-    #
-    # NOTE: this still keys off state.start_location (the traveler's
-    # current position), not the destination's coordinates - that fix
-    # needs a destination -> lat/lon lookup that doesn't exist on this
-    # branch yet, so it's left for when that lookup lands.
-    if state.start_location:
-        lat = state.start_location["lat"]
-        lon = state.start_location["lon"]
-        if state.trip_dates:
-            dates = [d["start_date"] for d in state.trip_dates]
-        else:
-            # No calendar connected - previously this meant weather was
-            # never fetched at all (trip_dates stayed None on the most
-            # common path). Default to today + duration_days (or 1 day)
-            # so weather still gets checked for *some* dates.
-            span = state.duration_days or 1
-            today = datetime.utcnow().date()
-            dates = [(today + timedelta(days=i)).isoformat() for i in range(span)]
-        state.weather = await get_weather(lat, lon, dates)
+    if not state.destination:
+        state.completed_steps.append("context")
+        return state
+
+    coords = await geocode_destination(state.destination)
+    if not coords:
+        # Couldn't resolve the destination to coordinates - degrade
+        # gracefully rather than guessing, same as every other tool's
+        # failure mode (BUILD_PLAN.md §8).
+        state.completed_steps.append("context")
+        return state
+
+    lat, lon = coords["lat"], coords["lon"]
+
+    if state.trip_dates:
+        dates = [d["start_date"] for d in state.trip_dates]
+    else:
+        # No calendar connected - default to today + duration_days (or 1
+        # day) so weather/disaster still get checked for *some* dates.
+        span = state.duration_days or 1
+        today = datetime.utcnow().date()
+        dates = [(today + timedelta(days=i)).isoformat() for i in range(span)]
+
+    state.weather, state.disaster = await asyncio.gather(
+        get_weather(lat, lon, dates),
+        get_disaster_info(lat, lon),
+    )
     state.completed_steps.append("context")
     return state
+
 
 
 async def _recommend_node(state: TripState) -> TripState:

@@ -32,6 +32,8 @@ async def run_case(label: str, user_input: str):
     print("destination:", destination)
     print("completed_steps:", completed_steps)
     print("errors:", errors)
+    print("weather:", result.get("weather"))
+    print("disaster:", result.get("disaster"))
     print("final_response:", final_response)
 
     ok = final_response is not None and isinstance(completed_steps, list) and len(completed_steps) > 0
