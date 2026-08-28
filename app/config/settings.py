@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     google_calendar_client_id: str = "" 
     google_calendar_client_secret: str = ""
     google_calendar_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    secret_key: str = "dev-secret-change-in-production"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

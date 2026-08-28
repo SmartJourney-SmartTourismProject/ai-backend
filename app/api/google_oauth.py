@@ -2,11 +2,14 @@
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from app.config.settings import settings
 from app.tools.calendar_tool import save_credentials, SCOPES
 
 router = APIRouter(prefix="/auth/google", tags=["google-oauth"])
+
+_state_signer = URLSafeTimedSerializer(settings.secret_key, salt="oauth-state")
 
 
 def _build_flow() -> Flow:
@@ -29,18 +32,23 @@ def _build_flow() -> Flow:
 @router.get("/login")
 async def google_login(user_id: str = Query(...)):
     flow = _build_flow()
+    signed_state = _state_signer.dumps(user_id)
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
-        state=user_id,
+        state=signed_state,
     )
     return RedirectResponse(auth_url)
 
 
 @router.get("/callback")
 async def google_callback(code: str = Query(...), state: str = Query(...)):
-    user_id = state
+    try:
+        user_id = _state_signer.loads(state, max_age=600)  # 10-minute window
+    except (BadSignature, SignatureExpired):
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
     flow = _build_flow()
 
     try:
