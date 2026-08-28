@@ -9,7 +9,7 @@
 
 Per BUILD_PLAN §9, work is split **by agent ownership**, not by layer:
 
-- **Member A — Orchestrator track.** The router agent and every tool it calls directly: all live,
+- **Member A — Orchestrator track...** The router agent and every tool it calls directly: all live,
   per-request integrations with no DB dependency (location, calendar, weather, disaster), plus the
   rule-based guards, slot filling, the LangGraph wiring, and the FastAPI layer.
 - **Member B — Recommendation + Planner + Data track.** The two DB-backed agents, the Supabase
