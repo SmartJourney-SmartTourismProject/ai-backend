@@ -6,9 +6,14 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from app.utils.cache import cache_get, cache_set
+
+
 EONET_URL = "https://eonet.gsfc.nasa.gov/api/v3/events"
 USGS_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 GDACS_URL = "https://www.gdacs.org/xml/rss.xml"
+DISASTER_CACHE_TTL_SECONDS = 60 * 60  # 1 hour - disasters change slower than weather
+
 
 #distance in kilometers between two locations on Earth using their latitude and longitude.
 def _distance_km(lat1, lon1, lat2, lon2) -> float:
@@ -112,6 +117,11 @@ async def _fetch_gdacs(lat, lon, radius_km) -> list[dict]:
 #checks multiple disaster data sources concurrently, combines the nearby events, sorts them by severity, 
 #and determines whether the destination appears safe.
 async def get_disaster_info(lat: float, lon: float, radius_km: int = 300) -> dict:
+    cache_key = f"disaster:{lat:.2f}:{lon:.2f}:{radius_km}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+
     results = await asyncio.gather(
         _fetch_eonet(lat, lon, radius_km),
         _fetch_usgs(lat, lon, radius_km),
@@ -128,4 +138,7 @@ async def get_disaster_info(lat: float, lon: float, radius_km: int = 300) -> dic
         return {"safe": True, "active_events": [], "note": "disaster data unavailable"}
     rank = {"red": 0, "orange": 1, "green": 2}
     active_events.sort(key=lambda e: rank.get(e["severity"], 3))
-    return {"safe": len(active_events) == 0, "active_events": active_events}
+
+    result = {"safe": len(active_events) == 0, "active_events": active_events}
+    cache_set(cache_key, result, DISASTER_CACHE_TTL_SECONDS)
+    return result

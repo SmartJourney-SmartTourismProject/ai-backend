@@ -5,9 +5,13 @@ from datetime import datetime
 import httpx
 
 from app.config.settings import settings
+from app.utils.cache import cache_get, cache_set
+
 
 CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather"
 FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
+WEATHER_CACHE_TTL_SECONDS = 45 * 60  # 45 minutes
+
 
 
 async def get_weather(lat: float, lon: float, dates: list[str]) -> dict | None:
@@ -26,6 +30,12 @@ async def get_weather(lat: float, lon: float, dates: list[str]) -> dict | None:
     On any failure (bad key, network issue, API down), returns None —
     never raises. The Planner proceeds without weather in that case.
     """
+
+    cache_key = f"weather:{lat:.2f}:{lon:.2f}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+    
     if not settings.openweather_api_key:
         return None
 
@@ -80,7 +90,10 @@ async def get_weather(lat: float, lon: float, dates: list[str]) -> dict | None:
                 "rain_probability": max(pops),
             })
 
-        return {"current": current, "forecast": forecast}
+        result = {"current": current, "forecast": forecast}
+        cache_set(cache_key, result, WEATHER_CACHE_TTL_SECONDS)
+        return result
+
 
     except Exception:
         return None
