@@ -10,14 +10,15 @@ EONET_URL = "https://eonet.gsfc.nasa.gov/api/v3/events"
 USGS_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 GDACS_URL = "https://www.gdacs.org/xml/rss.xml"
 
-
+#distance in kilometers between two locations on Earth using their latitude and longitude.
 def _distance_km(lat1, lon1, lat2, lon2) -> float:
     lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
     dlat, dlon = lat2 - lat1, lon2 - lon1
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
     return 6371 * 2 * math.asin(math.sqrt(a))
 
-
+#fetches active natural-disaster events from NASA EONET and 
+# returns only the events that are within a specified distance of the user's destination.
 async def _fetch_eonet(lat, lon, radius_km) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -48,7 +49,7 @@ async def _fetch_eonet(lat, lon, radius_km) -> list[dict]:
                         "distance_km": round(distance, 1)})
     return events
 
-
+#specifically checks for earthquakes using the USGS API.
 async def _fetch_usgs(lat, lon, radius_km) -> list[dict]:
     try:
         start_time = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -74,7 +75,8 @@ async def _fetch_usgs(lat, lon, radius_km) -> list[dict]:
                         "distance_km": round(distance, 1) if distance is not None else None})
     return events
 
-
+#fetches the GDACS disaster RSS feed, extracts the location and severity of each alert, 
+#keeps only alerts within the specified radius of the destination, and returns them in a simplified format.
 async def _fetch_gdacs(lat, lon, radius_km) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -107,7 +109,8 @@ async def _fetch_gdacs(lat, lon, radius_km) -> list[dict]:
         return []
     return events
 
-
+#checks multiple disaster data sources concurrently, combines the nearby events, sorts them by severity, 
+#and determines whether the destination appears safe.
 async def get_disaster_info(lat: float, lon: float, radius_km: int = 300) -> dict:
     results = await asyncio.gather(
         _fetch_eonet(lat, lon, radius_km),
