@@ -145,6 +145,12 @@ _SOFT_ERROR_PREFIXES = ("location_unresolved",)
 
 
 async def _respond_node(state: TripState) -> TripState:
+    
+    if state.clarification_needed:
+        state.final_response = state.clarification_needed
+        state.completed_steps.append("respond")
+        return state    
+    
     hard_errors = [e for e in state.errors if not e.startswith(_SOFT_ERROR_PREFIXES)]
     soft_notes = [e for e in state.errors if e.startswith(_SOFT_ERROR_PREFIXES)]
 
@@ -170,6 +176,10 @@ def _route_after_validate(state: TripState) -> str:
 def _route_after_policy(state: TripState) -> str:
     return "slot_fill" if not state.errors else "respond"
 
+def _route_after_slot_fill(state: TripState) -> str:
+    return "respond" if state.clarification_needed else "location"
+
+
 
 def build_orchestrator_graph():
     graph = StateGraph(TripState)
@@ -188,8 +198,8 @@ def build_orchestrator_graph():
 
     graph.add_conditional_edges("validate", _route_after_validate)
     graph.add_conditional_edges("policy", _route_after_policy)
+    graph.add_conditional_edges("slot_fill", _route_after_slot_fill)
 
-    graph.add_edge("slot_fill", "location")
     graph.add_edge("location", "calendar")
     graph.add_edge("calendar", "context")
     graph.add_edge("context", "recommend")

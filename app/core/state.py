@@ -31,6 +31,8 @@ class TripState(BaseModel):
     # External context
     weather: Optional[dict] = None
     disaster: Optional[dict] = None     # {"safe": bool, "active_events": [...]}
+    clarification_needed: Optional[str] = None
+
 
     # AI outputs
     attractions: List[dict] = Field(default_factory=list)

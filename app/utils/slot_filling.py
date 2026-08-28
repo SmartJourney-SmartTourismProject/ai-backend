@@ -6,6 +6,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config.settings import settings
 from app.core.state import TripState
+from app.tools import db_tool
+
 
 
 class _ExtractedSlots(BaseModel):
@@ -92,5 +94,22 @@ async def fill_slots(state: TripState) -> TripState:
 
     except Exception as e:
         state.errors.append(f"slot_filling failed: {e}")
+
+    if state.destination and state.duration_days is None:
+        # Destination-only request: default to 1 day of activities + travel
+        # time, per BUILD_PLAN.md §2, instead of leaving duration unset.
+        state.duration_days = 1
+
+    if state.user_id:
+        profile = await db_tool.get_user_profile(state.user_id)
+        if not state.interests and profile.get("interests"):
+            state.interests = profile["interests"]
+        if state.travel_style is None and profile.get("travel_style"):
+            state.travel_style = profile["travel_style"]
+        if state.budget is None and profile.get("budget"):
+            state.budget = profile["budget"]
+
+    if state.destination is None:
+        state.clarification_needed = "Which destination would you like to visit?"
 
     return state

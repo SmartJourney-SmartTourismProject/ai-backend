@@ -41,6 +41,18 @@ async def run_case(label: str, user_input: str):
     return ok
 
 
+async def run_case_with_user(label: str, user_input: str, user_id: str):
+    state = TripState(user_input=user_input, user_id=user_id)
+    print(f"\n{'=' * 60}\nCASE: {label}\nInput: {user_input!r} (user_id={user_id!r})\n{'=' * 60}")
+    result = await orchestrator.ainvoke(state)
+    print("destination:", result.get("destination"))
+    print("duration_days:", result.get("duration_days"))
+    print("interests:", result.get("interests"))
+    print("travel_style:", result.get("travel_style"))
+    print("budget:", result.get("budget"))
+    print("final_response:", result.get("final_response"))
+
+
 async def main():
     cases = [
         ("Full details", "I want to take my wife and kid to Kandy for a week, we love nature and food, budget around $500"),
@@ -55,6 +67,8 @@ async def main():
 
     print(f"\n{'=' * 60}")
     print(f"{passed}/{len(cases)} cases completed without crashing")
+
+    await run_case_with_user("Destination only + known profile", "I want to visit Galle", "demo-user-1")
 
 
 if __name__ == "__main__":
