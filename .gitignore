@@ -19,3 +19,4 @@ __pycache__/
 *.log
 
 calendar_tokens.json
+trip_sessions.json

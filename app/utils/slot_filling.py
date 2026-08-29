@@ -63,14 +63,26 @@ When listing interests, use short singular lowercase tags (e.g. "beach",
 async def fill_slots(state: TripState) -> TripState:
     """
     Uses Gemini to extract destination/duration_days/budget/travelers/interests
-    from state.user_input, filling only the fields the user actually
-    mentioned. Fields already set on state are not overwritten. On any
-    LLM/parsing failure, state is returned unchanged (errors logged to
-    state.errors) rather than raising.
+    from state.user_input.
+
+    Two modes:
+    - First turn (state.is_followup is False): only fills fields the user
+      hasn't already set elsewhere (e.g. via the API request). Missing
+      destination triggers a clarification question rather than a guess.
+    - Follow-up turn (state.is_followup is True - a session_id matched a
+      prior turn, see app/utils/session_store.py): every field already has
+      a carried-over value from last time, so extracted fields OVERWRITE
+      instead of only filling gaps - "make it cheaper" should actually
+      change state.budget, not be ignored because budget was already set.
+      Defaulting/profile-lookup/clarification below only make sense for a
+      first turn, so they're skipped entirely on a follow-up.
+
+    On any LLM/parsing failure, state is returned unchanged (errors logged
+    to state.errors) rather than raising.
     """
     try:
         llm = ChatGoogleGenerativeAI(
-            model="gemini-3.6-flash",
+            model=settings.llm_model,
             google_api_key=settings.gemini_api_key,
             temperature=0,
         )
@@ -81,19 +93,34 @@ async def fill_slots(state: TripState) -> TripState:
             ("human", state.user_input),
         ])
 
-        if state.destination is None and result.destination:
-            state.destination = result.destination
-        if state.duration_days is None and result.duration_days:
-            state.duration_days = result.duration_days
-        if state.budget is None and result.budget:
-            state.budget = result.budget
-        if state.travelers is None and result.travelers:
-            state.travelers = result.travelers
-        if not state.interests and result.interests:
-            state.interests = result.interests
+        if state.is_followup:
+            if result.destination:
+                state.destination = result.destination
+            if result.duration_days:
+                state.duration_days = result.duration_days
+            if result.budget:
+                state.budget = result.budget
+            if result.travelers:
+                state.travelers = result.travelers
+            if result.interests:
+                state.interests = result.interests
+        else:
+            if state.destination is None and result.destination:
+                state.destination = result.destination
+            if state.duration_days is None and result.duration_days:
+                state.duration_days = result.duration_days
+            if state.budget is None and result.budget:
+                state.budget = result.budget
+            if state.travelers is None and result.travelers:
+                state.travelers = result.travelers
+            if not state.interests and result.interests:
+                state.interests = result.interests
 
     except Exception as e:
         state.errors.append(f"slot_filling failed: {e}")
+
+    if state.is_followup:
+        return state
 
     if state.destination and state.duration_days is None:
         # Destination-only request: default to 1 day of activities + travel

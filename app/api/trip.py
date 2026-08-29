@@ -1,4 +1,5 @@
 # app/api/trip.py
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Request
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 from app.core.state import TripState
 from app.core.orchestrator import orchestrator
 from app.tools.location_tool import resolve_start_location
+from app.utils.session_store import load_session, save_session
 
 router = APIRouter(tags=["trip"])
 
@@ -21,12 +23,20 @@ class TripPlanRequest(BaseModel):
     language: str = "en"
     user_id: Optional[str] = None
     client_gps: Optional[ClientGPS] = None
+    # Multi-turn conversations: omit on the first message, then pass back
+    # the session_id this endpoint returned to continue modifying the same
+    # trip (e.g. "make it cheaper", "swap the temple for something indoors")
+    # instead of starting a brand new plan from scratch.
+    session_id: Optional[str] = None
 
 
 class TripPlanResponse(BaseModel):
+    session_id: str
     destination: Optional[str] = None
     itinerary: list = []
     estimated_cost: Optional[float] = None
+    weather: Optional[dict] = None
+    disaster: Optional[dict] = None
     final_response: Optional[str] = None
     errors: list[str] = []
     completed_steps: list[str] = []
@@ -35,29 +45,50 @@ class TripPlanResponse(BaseModel):
 @router.post("/trip-plan", response_model=TripPlanResponse)
 async def create_trip_plan(payload: TripPlanRequest, request: Request):
     """
-    Runs the full Orchestrator graph for a single trip-planning request.
+    Runs the full Orchestrator graph for a single trip-planning turn.
     Resolves start_location here (GPS from the request body if the client
     sent it, else falling back to the request's own IP) before invoking
     the graph, since TripState itself has no client_gps/client_ip fields.
+
+    Multi-turn: if payload.session_id matches a previous turn, that turn's
+    destination/budget/interests/itinerary/etc. are loaded onto the new
+    state (state.is_followup=True) before running the graph, so this
+    message is treated as a modification of the existing plan rather than
+    a fresh one. See app/utils/session_store.py for what's carried over.
     """
     client_gps = payload.client_gps.model_dump() if payload.client_gps else None
     client_ip = request.client.host if request.client else None
 
     start_location = await resolve_start_location(client_gps, client_ip)
 
+    session_id = payload.session_id or str(uuid.uuid4())
+    carried_over = load_session(session_id) if payload.session_id else None
+
     initial_state = TripState(
         user_input=payload.user_input,
         language=payload.language,
         user_id=payload.user_id,
         start_location=start_location,
+        session_id=session_id,
+        is_followup=carried_over is not None,
+        **(carried_over or {}),
     )
+    # start_location resolved above always wins over a carried-over one -
+    # the traveler's location this turn is more current than last turn's.
+    if start_location:
+        initial_state.start_location = start_location
 
     result = await orchestrator.ainvoke(initial_state)
 
+    save_session(session_id, TripState(**result))
+
     return TripPlanResponse(
+        session_id=session_id,
         destination=result.get("destination"),
         itinerary=result.get("itinerary", []),
         estimated_cost=result.get("estimated_cost"),
+        weather=result.get("weather"),
+        disaster=result.get("disaster"),
         final_response=result.get("final_response"),
         errors=result.get("errors", []),
         completed_steps=result.get("completed_steps", []),
