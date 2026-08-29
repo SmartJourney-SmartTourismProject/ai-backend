@@ -22,16 +22,20 @@ def _distance_km(lat1, lon1, lat2, lon2) -> float:
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
     return 6371 * 2 * math.asin(math.sqrt(a))
 
-#fetches active natural-disaster events from NASA EONET and 
+#fetches active natural-disaster events from NASA EONET and
 # returns only the events that are within a specified distance of the user's destination.
-async def _fetch_eonet(lat, lon, radius_km) -> list[dict]:
+# Returns None if the request itself failed (so get_disaster_info can tell
+# "this source is down" apart from "this source confirmed zero nearby
+# events" - the latter is a real []), and [] once it succeeded regardless
+# of how many (zero or more) events matched.
+async def _fetch_eonet(lat, lon, radius_km) -> list[dict] | None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(EONET_URL, params={"status": "open", "days": 20})
             resp.raise_for_status()
             data = resp.json()
     except Exception:
-        return []
+        return None
     events = []
     for event in data.get("events", []):
         geometries = event.get("geometries") or []
@@ -55,7 +59,7 @@ async def _fetch_eonet(lat, lon, radius_km) -> list[dict]:
     return events
 
 #specifically checks for earthquakes using the USGS API.
-async def _fetch_usgs(lat, lon, radius_km) -> list[dict]:
+async def _fetch_usgs(lat, lon, radius_km) -> list[dict] | None:
     try:
         start_time = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -66,7 +70,7 @@ async def _fetch_usgs(lat, lon, radius_km) -> list[dict]:
             resp.raise_for_status()
             data = resp.json()
     except Exception:
-        return []
+        return None
     events = []
     for feature in data.get("features", []):
         props = feature.get("properties", {})
@@ -80,16 +84,16 @@ async def _fetch_usgs(lat, lon, radius_km) -> list[dict]:
                         "distance_km": round(distance, 1) if distance is not None else None})
     return events
 
-#fetches the GDACS disaster RSS feed, extracts the location and severity of each alert, 
+#fetches the GDACS disaster RSS feed, extracts the location and severity of each alert,
 #keeps only alerts within the specified radius of the destination, and returns them in a simplified format.
-async def _fetch_gdacs(lat, lon, radius_km) -> list[dict]:
+async def _fetch_gdacs(lat, lon, radius_km) -> list[dict] | None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(GDACS_URL)
             resp.raise_for_status()
             xml_content = resp.text
     except Exception:
-        return []
+        return None
     events = []
     try:
         root = ET.fromstring(xml_content)
@@ -111,7 +115,7 @@ async def _fetch_gdacs(lat, lon, radius_km) -> list[dict]:
             events.append({"type": "gdacs_alert", "severity": severity, "title": title,
                             "source": "GDACS", "distance_km": round(distance, 1)})
     except ET.ParseError:
-        return []
+        return None
     return events
 
 #checks multiple disaster data sources concurrently, combines the nearby events, sorts them by severity, 
@@ -128,14 +132,19 @@ async def get_disaster_info(lat: float, lon: float, radius_km: int = 300) -> dic
         _fetch_gdacs(lat, lon, radius_km),
         return_exceptions=True,
     )
+
+    # Each _fetch_* returns None on failure, [] on a confirmed-empty result
+    # (source is up, zero matching events) - only when EVERY source failed
+    # do we not actually know whether it's safe, hence the "unavailable"
+    # note rather than a confident (but potentially wrong) "safe".
+    if all(r is None or isinstance(r, Exception) for r in results):
+        return {"safe": True, "active_events": [], "note": "disaster data unavailable"}
+
     active_events: list[dict] = []
-    all_failed = True
     for r in results:
         if isinstance(r, list):
             active_events.extend(r)
-            all_failed = False
-    if all_failed:
-        return {"safe": True, "active_events": [], "note": "disaster data unavailable"}
+
     rank = {"red": 0, "orange": 1, "green": 2}
     active_events.sort(key=lambda e: rank.get(e["severity"], 3))
 

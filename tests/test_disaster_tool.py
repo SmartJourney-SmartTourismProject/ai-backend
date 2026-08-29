@@ -44,29 +44,47 @@ async def test_nearby_earthquake_is_detected():
 
 
 @respx.mock
-async def test_all_sources_returning_http_errors_still_reports_safe():
-    # Each _fetch_* function catches its own HTTP errors internally and
-    # returns [] rather than raising - so from get_disaster_info's point of
-    # view, "all three APIs are down" and "confirmed zero events nearby"
-    # currently look identical. This documents that actual behavior; it
-    # does NOT reach the "note": "disaster data unavailable" fallback
-    # below, since that only fires when an exception genuinely reaches
-    # asyncio.gather (see test_exception_escaping_a_fetcher_triggers_note_fallback).
+async def test_all_sources_failing_reports_unavailable_not_falsely_safe():
+    # Regression test: each _fetch_* used to catch its own HTTP errors and
+    # return [] rather than None, so "all three APIs are down" and
+    # "confirmed zero events nearby" were indistinguishable and this always
+    # reported a false "safe: True" with no indication anything failed.
+    # Now a real outage is correctly reported as "unavailable", not "safe".
     respx.get(EONET_URL).mock(return_value=httpx.Response(500))
     respx.get(USGS_URL).mock(return_value=httpx.Response(500))
     respx.get(GDACS_URL).mock(return_value=httpx.Response(500))
 
     result = await get_disaster_info(7.29, 80.63)
 
-    assert result["safe"] is True
-    assert result["active_events"] == []
+    assert result == {"safe": True, "active_events": [], "note": "disaster data unavailable"}
+
+
+@respx.mock
+async def test_one_source_failing_still_merges_the_others():
+    # A partial outage should NOT trigger "unavailable" - the sources that
+    # did respond still get merged normally.
+    respx.get(EONET_URL).mock(return_value=httpx.Response(500))  # down
+    respx.get(USGS_URL).mock(return_value=httpx.Response(200, json={
+        "features": [{
+            "properties": {"mag": 6.5, "place": "10km N of Testville"},
+            "geometry": {"coordinates": [80.63, 7.29, 10.0]},
+        }]
+    }))
+    respx.get(GDACS_URL).mock(return_value=httpx.Response(200, text=EMPTY_GDACS))
+
+    result = await get_disaster_info(7.29, 80.63)
+
     assert "note" not in result
+    assert result["safe"] is False
+    assert len(result["active_events"]) == 1
+    assert result["active_events"][0]["source"] == "USGS"
 
 
 async def test_exception_escaping_a_fetcher_triggers_note_fallback():
     # Bypasses the per-source try/except entirely by mocking the fetcher
     # functions themselves, to prove the all-sources-failed fallback path
-    # does work when a real exception reaches asyncio.gather.
+    # also works when a real exception (not just a returned None) reaches
+    # asyncio.gather.
     original_eonet = disaster_tool_module._fetch_eonet
     original_usgs = disaster_tool_module._fetch_usgs
     original_gdacs = disaster_tool_module._fetch_gdacs
