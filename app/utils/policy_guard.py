@@ -1,6 +1,18 @@
-############THIS IS NOT FINALIZE YET BEACUSE THERE CAN BE LOOPHOLES IN THE POLICY GUARD. THIS IS JUST A TESTING FILE FOR NOW.############
-
 # app/utils/policy_guard.py
+"""
+Policy Agent (SAD §8.2 package diagram): rule-based check that blocks
+clearly illegal/harmful requests before any paid LLM call runs.
+
+Deliberate design choice, not a placeholder: a substring blocklist over
+specific phrases (not bare words) is inherently bypassable by paraphrasing,
+misspelling, or translation - it stops the obvious case, not a determined
+bad actor. That trade-off is accepted for this capstone's scope; a
+production-grade replacement would be an LLM-based content classifier.
+Entries are deliberately whole phrases rather than single words to avoid
+over-blocking real travel queries - "gun" alone would block "gun museum",
+"ivory" alone would block "Ivory Coast" (a real destination). Keep new
+entries specific enough to survive that test before adding them.
+"""
 from app.core.state import TripState
 
 # Grouped by category for maintainability — expand within a category
@@ -20,8 +32,12 @@ _BLOCKED_KEYWORDS = [
     # violence / harm
     "kill someone", "hire a hitman", "murder for hire", "acid attack",
 
-    # illegal wildlife / goods trade (relevant for a tourism assistant)
-    "poach", "ivory trade", "endangered species smuggling",
+    # illegal wildlife / goods trade (relevant for a tourism assistant) -
+    # "ivory"/"poach" alone would false-positive on real destinations and
+    # legitimate wildlife-viewing queries (e.g. "Ivory Coast", "poaching
+    # prevention safari"), so these stay as specific phrases.
+    "poach an animal", "ivory trade", "ivory market", "buy ivory",
+    "sell ivory", "endangered species smuggling",
 
     # exploitation
     "child exploitation", "sex trafficking", "forced labor",
