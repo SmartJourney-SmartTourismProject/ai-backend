@@ -9,6 +9,15 @@ class TripState(BaseModel):
     # Language information
     language: str = "en"
 
+    # Multi-turn conversation support: session_id ties this request to a
+    # prior trip-plan turn (see app/utils/session_store.py). is_followup is
+    # set when a previous session was found and loaded, so slot_filling and
+    # RecommendationAgent know to treat user_input as a MODIFICATION request
+    # against the already-carried-over fields below, rather than a fresh
+    # trip description.
+    session_id: Optional[str] = None
+    is_followup: bool = False
+
     # Trip details
     destination: Optional[str] = None
     duration_days: Optional[int] = None
