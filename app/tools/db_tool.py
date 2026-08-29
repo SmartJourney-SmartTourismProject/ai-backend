@@ -101,84 +101,84 @@ def _row_to_event_dict(row: dict) -> dict:
 
 _MOCK_HOTELS = {
     "ella": [
-        {"id": "h1", "name": "Mountain View Hotel", "category": "hotel", "destination": "Ella", "price_range": "$$", "rating": 4.5, "interests": ["nature", "views", "hiking"], "description": "Beautiful hotel with mountain views"},
-        {"id": "h2", "name": "Ella Flower Garden Resort", "category": "hotel", "destination": "Ella", "price_range": "$$$", "rating": 4.7, "interests": ["luxury", "nature", "relaxation"], "description": "Luxury resort with flower gardens"},
-        {"id": "h3", "name": "Backpacker's Hostel Ella", "category": "hotel", "destination": "Ella", "price_range": "$", "rating": 4.0, "interests": ["budget", "social", "hiking"], "description": "Affordable hostel for backpackers"},
+        {"id": "h1", "name": "Mountain View Hotel", "category": "hotel", "destination": "Ella", "price_range": "$$", "rating": 4.5, "interests": ["nature", "views", "hiking"], "description": "Beautiful hotel with mountain views", "lat": 6.8667, "lon": 81.0466},
+        {"id": "h2", "name": "Ella Flower Garden Resort", "category": "hotel", "destination": "Ella", "price_range": "$$$", "rating": 4.7, "interests": ["luxury", "nature", "relaxation"], "description": "Luxury resort with flower gardens", "lat": 6.8710, "lon": 81.0450},
+        {"id": "h3", "name": "Backpacker's Hostel Ella", "category": "hotel", "destination": "Ella", "price_range": "$", "rating": 4.0, "interests": ["budget", "social", "hiking"], "description": "Affordable hostel for backpackers", "lat": 6.8656, "lon": 81.0461},
     ],
     "kandy": [
-        {"id": "h4", "name": "Kandy Lake View Hotel", "category": "hotel", "destination": "Kandy", "price_range": "$$", "rating": 4.3, "interests": ["culture", "views", "history"], "description": "Hotel overlooking Kandy Lake"},
-        {"id": "h5", "name": "Theva Residency", "category": "hotel", "destination": "Kandy", "price_range": "$$$", "rating": 4.6, "interests": ["luxury", "culture", "spa"], "description": "Luxury hotel near Temple of Tooth"},
+        {"id": "h4", "name": "Kandy Lake View Hotel", "category": "hotel", "destination": "Kandy", "price_range": "$$", "rating": 4.3, "interests": ["culture", "views", "history"], "description": "Hotel overlooking Kandy Lake", "lat": 7.2931, "lon": 80.6392},
+        {"id": "h5", "name": "Theva Residency", "category": "hotel", "destination": "Kandy", "price_range": "$$$", "rating": 4.6, "interests": ["luxury", "culture", "spa"], "description": "Luxury hotel near Temple of Tooth", "lat": 7.2945, "lon": 80.6350},
     ],
     "colombo": [
-        {"id": "h6", "name": "Galle Face Hotel", "category": "hotel", "destination": "Colombo", "price_range": "$$$$", "rating": 4.8, "interests": ["luxury", "history", "beach"], "description": "Iconic colonial luxury hotel"},
-        {"id": "h7", "name": "CityRest Fort", "category": "hotel", "destination": "Colombo", "price_range": "$$", "rating": 4.2, "interests": ["budget", "city", "business"], "description": "Modern hotel in Fort district"},
+        {"id": "h6", "name": "Galle Face Hotel", "category": "hotel", "destination": "Colombo", "price_range": "$$$$", "rating": 4.8, "interests": ["luxury", "history", "beach"], "description": "Iconic colonial luxury hotel", "lat": 6.9223, "lon": 79.8449},
+        {"id": "h7", "name": "CityRest Fort", "category": "hotel", "destination": "Colombo", "price_range": "$$", "rating": 4.2, "interests": ["budget", "city", "business"], "description": "Modern hotel in Fort district", "lat": 6.9344, "lon": 79.8428},
     ],
     "galle": [
-        {"id": "h8", "name": "Jetwing Lighthouse", "category": "hotel", "destination": "Galle", "price_range": "$$$$", "rating": 4.7, "interests": ["luxury", "beach", "history"], "description": "Luxury resort designed by Geoffrey Bawa"},
-        {"id": "h9", "name": "Fort Bazaar", "category": "hotel", "destination": "Galle", "price_range": "$$$", "rating": 4.5, "interests": ["boutique", "history", "culture"], "description": "Boutique hotel in Galle Fort"},
+        {"id": "h8", "name": "Jetwing Lighthouse", "category": "hotel", "destination": "Galle", "price_range": "$$$$", "rating": 4.7, "interests": ["luxury", "beach", "history"], "description": "Luxury resort designed by Geoffrey Bawa", "lat": 6.0327, "lon": 80.2168},
+        {"id": "h9", "name": "Fort Bazaar", "category": "hotel", "destination": "Galle", "price_range": "$$$", "rating": 4.5, "interests": ["boutique", "history", "culture"], "description": "Boutique hotel in Galle Fort", "lat": 6.0300, "lon": 80.2170},
     ],
 }
 
 _MOCK_RESTAURANTS = {
     "ella": [
-        {"id": "r1", "name": "Cafe Chill", "category": "restaurant", "destination": "Ella", "price_range": "$", "rating": 4.4, "interests": ["local cuisine", "vegetarian", "budget"], "description": "Popular spot for Sri Lankan food"},
-        {"id": "r2", "name": "360 Ella", "category": "restaurant", "destination": "Ella", "price_range": "$$", "rating": 4.6, "interests": ["views", "fine dining", "sunset"], "description": "Restaurant with 360-degree views"},
-        {"id": "r3", "name": "Dream Cafe", "category": "restaurant", "destination": "Ella", "price_range": "$", "rating": 4.3, "interests": ["western", "breakfast", "coffee"], "description": "Cozy cafe with good coffee"},
+        {"id": "r1", "name": "Cafe Chill", "category": "restaurant", "destination": "Ella", "price_range": "$", "rating": 4.4, "interests": ["local cuisine", "vegetarian", "budget"], "description": "Popular spot for Sri Lankan food", "lat": 6.8710, "lon": 81.0463},
+        {"id": "r2", "name": "360 Ella", "category": "restaurant", "destination": "Ella", "price_range": "$$", "rating": 4.6, "interests": ["views", "fine dining", "sunset"], "description": "Restaurant with 360-degree views", "lat": 6.8785, "lon": 81.0490},
+        {"id": "r3", "name": "Dream Cafe", "category": "restaurant", "destination": "Ella", "price_range": "$", "rating": 4.3, "interests": ["western", "breakfast", "coffee"], "description": "Cozy cafe with good coffee", "lat": 6.8698, "lon": 81.0468},
     ],
     "kandy": [
-        {"id": "r4", "name": "The Empire Cafe", "category": "restaurant", "destination": "Kandy", "price_range": "$$", "rating": 4.4, "interests": ["colonial", "tea", "history"], "description": "Historic cafe in colonial building"},
-        {"id": "r5", "name": "Slightly Chilled Lounge Bar", "category": "restaurant", "destination": "Kandy", "price_range": "$$$", "rating": 4.5, "interests": ["fine dining", "cocktails", "views"], "description": "Upscale dining with lake views"},
+        {"id": "r4", "name": "The Empire Cafe", "category": "restaurant", "destination": "Kandy", "price_range": "$$", "rating": 4.4, "interests": ["colonial", "tea", "history"], "description": "Historic cafe in colonial building", "lat": 7.2939, "lon": 80.6413},
+        {"id": "r5", "name": "Slightly Chilled Lounge Bar", "category": "restaurant", "destination": "Kandy", "price_range": "$$$", "rating": 4.5, "interests": ["fine dining", "cocktails", "views"], "description": "Upscale dining with lake views", "lat": 7.2910, "lon": 80.6410},
     ],
     "colombo": [
-        {"id": "r6", "name": "Ministry of Crab", "category": "restaurant", "destination": "Colombo", "price_range": "$$$$", "rating": 4.8, "interests": ["seafood", "fine dining", "celebrity chef"], "description": "World-renowned crab restaurant"},
-        {"id": "r7", "name": "Upali's by Nawaloka", "category": "restaurant", "destination": "Colombo", "price_range": "$$$", "rating": 4.6, "interests": ["traditional", "sri lankan", "family"], "description": "Authentic Sri Lankan cuisine"},
+        {"id": "r6", "name": "Ministry of Crab", "category": "restaurant", "destination": "Colombo", "price_range": "$$$$", "rating": 4.8, "interests": ["seafood", "fine dining", "celebrity chef"], "description": "World-renowned crab restaurant", "lat": 6.9350, "lon": 79.8433},
+        {"id": "r7", "name": "Upali's by Nawaloka", "category": "restaurant", "destination": "Colombo", "price_range": "$$$", "rating": 4.6, "interests": ["traditional", "sri lankan", "family"], "description": "Authentic Sri Lankan cuisine", "lat": 6.9147, "lon": 79.8541},
     ],
     "galle": [
-        {"id": "r8", "name": "The Tuna & The Crab", "category": "restaurant", "destination": "Galle", "price_range": "$$$", "rating": 4.7, "interests": ["seafood", "fine dining", "beach"], "description": "Seafood restaurant in Galle Fort"},
-        {"id": "r9", "name": "Crepe-ology", "category": "restaurant", "destination": "Galle", "price_range": "$$", "rating": 4.4, "interests": ["crepes", "breakfast", "dessert"], "description": "Popular crepe restaurant"},
+        {"id": "r8", "name": "The Tuna & The Crab", "category": "restaurant", "destination": "Galle", "price_range": "$$$", "rating": 4.7, "interests": ["seafood", "fine dining", "beach"], "description": "Seafood restaurant in Galle Fort", "lat": 6.0270, "lon": 80.2168},
+        {"id": "r9", "name": "Crepe-ology", "category": "restaurant", "destination": "Galle", "price_range": "$$", "rating": 4.4, "interests": ["crepes", "breakfast", "dessert"], "description": "Popular crepe restaurant", "lat": 6.0292, "lon": 80.2172},
     ],
 }
 
 _MOCK_ATTRACTIONS = {
     "ella": [
-        {"id": "a1", "name": "Little Adam's Peak", "category": "attraction", "destination": "Ella", "price_range": "Free", "rating": 4.7, "interests": ["hiking", "views", "easy"], "description": "Easy hike with stunning panoramic views"},
-        {"id": "a2", "name": "Nine Arches Bridge", "category": "attraction", "destination": "Ella", "price_range": "Free", "rating": 4.8, "interests": ["photography", "history", "train"], "description": "Iconic colonial railway bridge"},
-        {"id": "a3", "name": "Ella Rock", "category": "attraction", "destination": "Ella", "price_range": "Free", "rating": 4.6, "interests": ["hiking", "challenging", "sunrise"], "description": "Challenging hike with rewarding views"},
-        {"id": "a4", "name": "Ravana Falls", "category": "attraction", "destination": "Ella", "price_range": "Free", "rating": 4.5, "interests": ["waterfall", "swimming", "nature"], "description": "Beautiful waterfall with swimming spots"},
+        {"id": "a1", "name": "Little Adam's Peak", "category": "attraction", "destination": "Ella", "price_range": "Free", "rating": 4.7, "interests": ["hiking", "views", "easy"], "description": "Easy hike with stunning panoramic views", "lat": 6.8698, "lon": 81.0561},
+        {"id": "a2", "name": "Nine Arches Bridge", "category": "attraction", "destination": "Ella", "price_range": "Free", "rating": 4.8, "interests": ["photography", "history", "train"], "description": "Iconic colonial railway bridge", "lat": 6.8781, "lon": 81.0592},
+        {"id": "a3", "name": "Ella Rock", "category": "attraction", "destination": "Ella", "price_range": "Free", "rating": 4.6, "interests": ["hiking", "challenging", "sunrise"], "description": "Challenging hike with rewarding views", "lat": 6.8636, "lon": 81.0424},
+        {"id": "a4", "name": "Ravana Falls", "category": "attraction", "destination": "Ella", "price_range": "Free", "rating": 4.5, "interests": ["waterfall", "swimming", "nature"], "description": "Beautiful waterfall with swimming spots", "lat": 6.8412, "lon": 81.0559},
     ],
     "kandy": [
-        {"id": "a5", "name": "Temple of the Sacred Tooth Relic", "category": "attraction", "destination": "Kandy", "price_range": "$", "rating": 4.8, "interests": ["culture", "history", "religion", "unesco"], "description": "UNESCO World Heritage Buddhist temple"},
-        {"id": "a6", "name": "Royal Botanical Gardens Peradeniya", "category": "attraction", "destination": "Kandy", "price_range": "$", "rating": 4.7, "interests": ["nature", "botany", "walking"], "description": "Extensive botanical gardens"},
-        {"id": "a7", "name": "Kandy Lake", "category": "attraction", "destination": "Kandy", "price_range": "Free", "rating": 4.4, "interests": ["walking", "views", "relaxation"], "description": "Scenic lake in city center"},
+        {"id": "a5", "name": "Temple of the Sacred Tooth Relic", "category": "attraction", "destination": "Kandy", "price_range": "$", "rating": 4.8, "interests": ["culture", "history", "religion", "unesco"], "description": "UNESCO World Heritage Buddhist temple", "lat": 7.2936, "lon": 80.6413},
+        {"id": "a6", "name": "Royal Botanical Gardens Peradeniya", "category": "attraction", "destination": "Kandy", "price_range": "$", "rating": 4.7, "interests": ["nature", "botany", "walking"], "description": "Extensive botanical gardens", "lat": 7.2698, "lon": 80.5972},
+        {"id": "a7", "name": "Kandy Lake", "category": "attraction", "destination": "Kandy", "price_range": "Free", "rating": 4.4, "interests": ["walking", "views", "relaxation"], "description": "Scenic lake in city center", "lat": 7.2906, "lon": 80.6414},
     ],
     "colombo": [
-        {"id": "a8", "name": "Galle Face Green", "category": "attraction", "destination": "Colombo", "price_range": "Free", "rating": 4.5, "interests": ["beach", "sunset", "street food", "walking"], "description": "Urban park along the coast"},
-        {"id": "a9", "name": "Gangaramaya Temple", "category": "attraction", "destination": "Colombo", "price_range": "$", "rating": 4.6, "interests": ["culture", "religion", "architecture"], "description": "Important Buddhist temple complex"},
-        {"id": "a10", "name": "National Museum Colombo", "category": "attraction", "destination": "Colombo", "price_range": "$", "rating": 4.3, "interests": ["history", "museum", "culture"], "description": "Largest museum in Sri Lanka"},
+        {"id": "a8", "name": "Galle Face Green", "category": "attraction", "destination": "Colombo", "price_range": "Free", "rating": 4.5, "interests": ["beach", "sunset", "street food", "walking"], "description": "Urban park along the coast", "lat": 6.9223, "lon": 79.8437},
+        {"id": "a9", "name": "Gangaramaya Temple", "category": "attraction", "destination": "Colombo", "price_range": "$", "rating": 4.6, "interests": ["culture", "religion", "architecture"], "description": "Important Buddhist temple complex", "lat": 6.9169, "lon": 79.8565},
+        {"id": "a10", "name": "National Museum Colombo", "category": "attraction", "destination": "Colombo", "price_range": "$", "rating": 4.3, "interests": ["history", "museum", "culture"], "description": "Largest museum in Sri Lanka", "lat": 6.9105, "lon": 79.8613},
     ],
     "galle": [
-        {"id": "a11", "name": "Galle Fort", "category": "attraction", "destination": "Galle", "price_range": "Free", "rating": 4.8, "interests": ["history", "unesco", "architecture", "walking"], "description": "UNESCO World Heritage Dutch fort"},
-        {"id": "a12", "name": "Jungle Beach", "category": "attraction", "destination": "Galle", "price_range": "Free", "rating": 4.5, "interests": ["beach", "swimming", "nature", "hidden gem"], "description": "Secluded beach near Galle Fort"},
-        {"id": "a13", "name": "Sea Turtle Hatchery", "category": "attraction", "destination": "Galle", "price_range": "$", "rating": 4.4, "interests": ["wildlife", "conservation", "family"], "description": "Turtle conservation center"},
+        {"id": "a11", "name": "Galle Fort", "category": "attraction", "destination": "Galle", "price_range": "Free", "rating": 4.8, "interests": ["history", "unesco", "architecture", "walking"], "description": "UNESCO World Heritage Dutch fort", "lat": 6.0300, "lon": 80.2167},
+        {"id": "a12", "name": "Jungle Beach", "category": "attraction", "destination": "Galle", "price_range": "Free", "rating": 4.5, "interests": ["beach", "swimming", "nature", "hidden gem"], "description": "Secluded beach near Galle Fort", "lat": 6.0180, "lon": 80.2280},
+        {"id": "a13", "name": "Sea Turtle Hatchery", "category": "attraction", "destination": "Galle", "price_range": "$", "rating": 4.4, "interests": ["wildlife", "conservation", "family"], "description": "Turtle conservation center", "lat": 6.0850, "lon": 80.2600},
     ],
 }
 
 _MOCK_EVENTS = {
     "ella": [
-        {"id": "e1", "title": "Ella Sunday Market", "destination": "Ella", "category": "market", "start_datetime": "2026-08-24T08:00:00", "end_datetime": "2026-08-24T14:00:00", "description": "Weekly market with local crafts and food"},
-        {"id": "e2", "title": "Ella Music Festival", "destination": "Ella", "category": "festival", "start_datetime": "2026-09-15T18:00:00", "end_datetime": "2026-09-15T23:00:00", "description": "Annual music festival in the hills"},
+        {"id": "e1", "title": "Ella Sunday Market", "destination": "Ella", "category": "market", "start_datetime": "2026-08-24T08:00:00", "end_datetime": "2026-08-24T14:00:00", "description": "Weekly market with local crafts and food", "lat": 6.8667, "lon": 81.0466},
+        {"id": "e2", "title": "Ella Music Festival", "destination": "Ella", "category": "festival", "start_datetime": "2026-09-15T18:00:00", "end_datetime": "2026-09-15T23:00:00", "description": "Annual music festival in the hills", "lat": 6.8698, "lon": 81.0468},
     ],
     "kandy": [
-        {"id": "e3", "title": "Kandy Esala Perahera", "destination": "Kandy", "category": "festival", "start_datetime": "2026-08-20T19:00:00", "end_datetime": "2026-08-30T23:00:00", "description": "Grand Buddhist festival with processions"},
-        {"id": "e4", "title": "Kandy Food Festival", "destination": "Kandy", "category": "food", "start_datetime": "2026-09-10T10:00:00", "end_datetime": "2026-09-12T22:00:00", "description": "Food festival showcasing local cuisine"},
+        {"id": "e3", "title": "Kandy Esala Perahera", "destination": "Kandy", "category": "festival", "start_datetime": "2026-08-20T19:00:00", "end_datetime": "2026-08-30T23:00:00", "description": "Grand Buddhist festival with processions", "lat": 7.2936, "lon": 80.6413},
+        {"id": "e4", "title": "Kandy Food Festival", "destination": "Kandy", "category": "food", "start_datetime": "2026-09-10T10:00:00", "end_datetime": "2026-09-12T22:00:00", "description": "Food festival showcasing local cuisine", "lat": 7.2906, "lon": 80.6337},
     ],
     "colombo": [
-        {"id": "e5", "title": "Colombo International Book Fair", "destination": "Colombo", "category": "exhibition", "start_datetime": "2026-09-18T09:00:00", "end_datetime": "2026-09-28T20:00:00", "description": "Annual book fair at BMICH"},
-        {"id": "e6", "title": "Colombo Jazz Festival", "destination": "Colombo", "category": "music", "start_datetime": "2026-10-05T18:00:00", "end_datetime": "2026-10-05T23:00:00", "description": "International jazz festival"},
+        {"id": "e5", "title": "Colombo International Book Fair", "destination": "Colombo", "category": "exhibition", "start_datetime": "2026-09-18T09:00:00", "end_datetime": "2026-09-28T20:00:00", "description": "Annual book fair at BMICH", "lat": 6.8926, "lon": 79.8663},
+        {"id": "e6", "title": "Colombo Jazz Festival", "destination": "Colombo", "category": "music", "start_datetime": "2026-10-05T18:00:00", "end_datetime": "2026-10-05T23:00:00", "description": "International jazz festival", "lat": 6.9271, "lon": 79.8612},
     ],
     "galle": [
-        {"id": "e7", "title": "Galle Literary Festival", "destination": "Galle", "category": "literary", "start_datetime": "2026-01-15T09:00:00", "end_datetime": "2026-01-19T20:00:00", "description": "Annual literary festival in Galle Fort"},
-        {"id": "e8", "title": "Galle Art Walk", "destination": "Galle", "category": "art", "start_datetime": "2026-08-30T16:00:00", "end_datetime": "2026-08-30T22:00:00", "description": "Evening art walk through Galle Fort"},
+        {"id": "e7", "title": "Galle Literary Festival", "destination": "Galle", "category": "literary", "start_datetime": "2026-01-15T09:00:00", "end_datetime": "2026-01-19T20:00:00", "description": "Annual literary festival in Galle Fort", "lat": 6.0300, "lon": 80.2167},
+        {"id": "e8", "title": "Galle Art Walk", "destination": "Galle", "category": "art", "start_datetime": "2026-08-30T16:00:00", "end_datetime": "2026-08-30T22:00:00", "description": "Evening art walk through Galle Fort", "lat": 6.0295, "lon": 80.2170},
     ],
 }
 
