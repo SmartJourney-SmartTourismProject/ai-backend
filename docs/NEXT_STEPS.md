@@ -1,13 +1,58 @@
 # Next Steps — post-merge plan
 
 **Branch:** `main` (after `temp-shaluka` merged in at `bfd1805`)
-**Snapshot:** 2026-08-29
-**Reference:** [BUILD_PLAN.md](BUILD_PLAN.md) — §7 API contract, §8 error/caching matrix, §10 phases, §12 verification checklist
+**Last updated:** 2026-08-29
+**Reference:** [BUILD_PLAN.md](BUILD_PLAN.md) — §7 API contract, §8 error/caching matrix, §10 phases, §12 verification checklist. Also cross-checked against the project's SRS and SAD documents.
 
-Both tracks are now on one branch and the full graph runs end to end against Member B's real
-agents. Test suite: **68 passing, 1 xfail**, no network calls, no API keys, ~5s.
+**Scope note:** this repo is the Python/FastAPI multi-agent AI system only. The NestJS backend and
+the web/mobile UI are separate repos and out of scope here — anything that's really their job
+(JWT auth, budget tracker persistence, subscriptions, admin panel, notification delivery, HTTPS
+termination) is noted as such below, not built here.
 
-This document is what's left, in the order worth doing it.
+Test suite: **101 passing, 0 xfail**, no network calls, no API keys, ~5s.
+
+---
+
+## Done since the merge
+
+- **Multi-turn conversations** (SRS §3.1.6/§4.1.5 "Modify Trip Plan"). `session_id` in/out of
+  `/trip-plan`, `app/utils/session_store.py` carries a trip's state between turns, `slot_filling.py`
+  overwrites fields on a follow-up instead of only filling gaps, `RecommendationAgent` refines the
+  existing itinerary instead of rebuilding from scratch.
+- **Map pins** — every itinerary item carries `lat`/`lon` (confirmed no real Google Maps routing
+  needed, just pins).
+- **`traveler_request` passthrough** — the raw message reaches `RecommendationAgent` on every call,
+  not just follow-ups, so special requirements that don't map to a structured slot get used.
+- **`budget_notes` bug fixed** — was silently discarded on every request (overwritten by
+  `_respond_node` immediately after being set). Now its own field, surfaced in the response.
+- **OpenWeather timezone bug** fixed (UTC `dt_txt` instead of server-local time).
+- **`datetime.utcnow()` deprecation** cleared.
+- **Policy guard decision made and shipped** — substring blocklist kept as a deliberate, documented
+  trade-off; "ivory market" gap closed with specific phrases (not a bare "ivory" keyword, which
+  would've false-positived on "Ivory Coast").
+- **§7 API contract settled (P1, was open — now done):** `TripPlanRequest.message` replaces
+  `user_input` at the API boundary (internal `TripState.user_input` name unchanged - only the
+  external contract moved). `completed_steps` now gated behind `settings.debug` instead of always
+  public. Added `tests/test_trip_api.py` — the endpoint itself had zero test coverage before this.
+- **`db_tool.get_user_profile` implemented for real** (was a P3 "blocked on Member B" stub) — now
+  queries Supabase's `traveler_profile` table first, falls back to empty defaults, same pattern as
+  every other lookup in that file. Needs two new columns Supabase doesn't have yet
+  (`default_budget`, `home_location`) — see `docs/db_migrations.sql`.
+- **`google_oauth_tokens` table wired in** (was the other P3 item) — `calendar_tool.py` now tries
+  Supabase first (including `token_expiry`/`scope`, both threaded through from the OAuth callback
+  and the token-refresh path), falls back to the local JSON file if Supabase isn't configured or
+  errors. Table DDL is in `docs/db_migrations.sql` for Member B to review/run — this repo can't
+  apply it directly.
+- Test coverage added that didn't exist before: `tests/test_recommendation_agent.py` (8 tests),
+  `tests/test_session_store.py`, `tests/test_trip_api.py` (6 tests), extended
+  `tests/test_db_tool.py` and `tests/test_calendar_token_store.py` for the real-Supabase paths,
+  plus follow-up-turn cases in `tests/test_slot_filling.py`.
+
+**Explicitly decided NOT to do here**, per discussion:
+- **Currency handling** (SRS mentions "preferred currency," mockups show LKR) — skipped.
+- **HTTPS/encryption in transit** (SRS §3.4.6) — not application code; TLS termination at whatever
+  reverse proxy/load balancer sits in front of this service at deploy time.
+- **Rate limiting/queueing** (SAD §10.3) — deferred, see P4 below.
 
 ---
 
@@ -16,207 +61,90 @@ This document is what's left, in the order worth doing it.
 | Phase | Status |
 |---|---|
 | Phase 1 — Foundations & contracts | Complete |
-| Phase 2 — Parallel build | Complete (`disaster_tool.py` was the last missing file; it exists now) |
+| Phase 2 — Parallel build | Complete |
 | Phase 3 — Data pipeline (Member B) | On `main` — Overpass/events ingest + scheduler present |
-| Phase 4 — Integration | **Complete.** `_recommend_node`/`_plan_node` call the real `RecommendationAgent`/`PlanningAgent` |
-| Phase 5 — API layer + testing | Mostly done. `POST /trip-plan` + OAuth live, CORS in `main.py`, real pytest suite. **§7 contract mismatch outstanding — see P1 below** |
-| Phase 6 — Error matrix, caching, demo | Caching done. Error-matrix walkthrough and demo script outstanding |
-| Phase 7 — NestJS + Admin Panel | Correctly not started (gated on Phase 6) |
+| Phase 4 — Integration | Complete |
+| Phase 5 — API layer + testing | Complete |
+| Phase 6 — Error matrix, caching, demo | Caching done. Error-matrix walkthrough + demo script outstanding |
+| Phase 7 — NestJS + Admin Panel | Separate repo, not started here (correctly gated on Phase 6) |
 
 ---
 
-## P0 — Small, self-contained, do these first
+## P1 — Phase 6: walk the §8 error matrix
 
-### 1. OpenWeather forecast timezone bug
-
-**File:** [app/tools/weather_tool.py:69](../app/tools/weather_tool.py#L69)
-
-```python
-slice_date = datetime.fromtimestamp(slice_["dt"]).date().isoformat()
-```
-
-`fromtimestamp()` with no timezone uses the **server's local timezone** to decide which calendar
-date a 3-hour forecast slice belongs to. The `dates` list it filters against is built from UTC
-dates, so on a server outside Sri Lanka's timezone the buckets shift and legitimate forecast days
-get dropped. This is not theoretical — during Step 3 testing, Galle returned
-`{"current": {...}, "forecast": []}`: current conditions fine, forecast silently empty.
-
-**Fix** — use OpenWeather's own `dt_txt` field (already UTC, already a date string):
-
-```python
-slice_date = slice_["dt_txt"].split(" ")[0]
-```
-
-or equivalently `datetime.fromtimestamp(slice_["dt"], tz=timezone.utc).date().isoformat()`
-(needs `timezone` added to the `datetime` import).
-
-**Verify:** [tests/test_weather_tool.py](../tests/test_weather_tool.py)'s `FORECAST_RESPONSE`
-fixture currently has no `dt_txt` field and its `dt` values don't assert on bucketing — add a
-test that pins two slices to a known UTC date and asserts they land in that date's bucket
-regardless of the machine's timezone.
-
-### 2. `datetime.utcnow()` deprecation
-
-**File:** [app/core/orchestrator.py:98](../app/core/orchestrator.py#L98)
-
-Emits a `DeprecationWarning` on every test run and is scheduled for removal in a future Python.
-Same fix shape as above:
-
-```python
-today = datetime.now(timezone.utc).date()
-```
-
-### 3. Policy guard — the known gap
-
-**File:** [app/utils/policy_guard.py:24](../app/utils/policy_guard.py#L24)
-
-The blocklist has `"ivory trade"` but not `"ivory market"`, so
-`"is there an ivory market I can visit"` passes. Currently tracked as an `xfail` in
-[tests/test_policy_guard.py](../tests/test_policy_guard.py) so it's visible rather than silently
-missing.
-
-Two options — **pick one and write the decision down**, don't leave it drifting:
-
-- **Ship the blocklist as-is for the capstone demo**, add `"ivory"` as a bare term (accepting that
-  it may over-block a legitimate "ivory tower" style phrase), flip the `xfail` to a normal test,
-  and note in the file that a substring blocklist is inherently bypassable.
-- **Replace the substring approach** with something less trivially evaded. Bigger job, and
-  probably not worth it before the demo.
-
-Whichever way it goes, the `############ NOT FINALIZED ############` banner at the top of the file
-should stop saying "this is just a testing file" once a decision is made.
-
----
-
-## P1 — §7 API contract: decide and align
-
-**File:** [app/api/trip.py](../app/api/trip.py) vs [BUILD_PLAN.md §7](BUILD_PLAN.md)
-
-The endpoint and the written contract still disagree. This matters more now than it did before,
-because **Phase 7's NestJS backend gets built against whichever one is written down**, and
-changing it later means changing two codebases.
-
-| §7 says | Code has |
-|---|---|
-| request key `message` | `user_input` |
-| request `session_id` | absent |
-| response `weather` | absent |
-| response `disaster_warnings` | absent |
-| — | extra: `destination`, `completed_steps` (a debug field, exposed publicly) |
-
-Note the internal inconsistency worth resolving while you're in there: the file's own design notes
-claim `completed_steps` is hidden as "internal-only", but `TripPlanResponse` exposes it.
-
-**Recommendation:** amend the code to match §7 rather than the reverse — `weather` and
-`disaster_warnings` are genuinely useful to a chat UI, and both are already populated in state by
-`_context_node`, so surfacing them is a few lines. Drop `completed_steps` from the public shape
-(or gate it behind `settings.debug`).
-
----
-
-## P2 — Phase 6: walk the §8 error matrix
-
-Now that everything is wired together for the first time, go tool by tool through
-[BUILD_PLAN.md §8](BUILD_PLAN.md) and confirm each failure mode degrades rather than crashes.
-Most already have a failure-mode test; the gaps are worth closing:
+Go tool by tool through [BUILD_PLAN.md §8](BUILD_PLAN.md) and confirm each failure mode degrades
+rather than crashes. Most already have a failure-mode test; the gaps:
 
 | Source | Failure test exists? |
 |---|---|
-| OpenWeather | Yes — `test_get_weather_api_failure_returns_none` |
+| OpenWeather | Yes |
 | EONET / USGS / GDACS | Partly — see the finding below |
-| Google Calendar | Yes — `test_get_free_days_google_api_error_returns_empty_not_raises` |
-| Location / IP lookup | Yes — `test_ip_lookup_http_failure_returns_none_not_raises` |
-| Supabase (`db_tool`) | **No** — falls back to mock data on exception, untested |
-| Gemini (slot filling) | Yes — `test_llm_failure_degrades_without_raising` |
-| Gemini (Recommendation/Planner) | **No** — Member B's side |
+| Google Calendar | Yes |
+| Location / IP lookup | Yes |
+| Supabase — listings (`get_hotels`/etc.) | No — falls back to mock data on exception, untested |
+| Supabase — `traveler_profile` / `google_oauth_tokens` | Yes — `test_get_user_profile_supabase_error_falls_back_to_defaults`, `test_supabase_error_falls_back_to_local_file` |
+| Gemini (slot filling) | Yes |
+| Gemini (Recommendation/Planner) | Yes |
 
-### The disaster-tool finding
+### The disaster-tool finding (still open)
 
 **File:** [app/tools/disaster_tool.py](../app/tools/disaster_tool.py)
 
-`get_disaster_info`'s "all three sources failed" fallback — the
-`{"safe": True, "active_events": [], "note": "disaster data unavailable"}` branch §8 explicitly
-asks for — **is unreachable in practice.** Each `_fetch_*` function catches its own exceptions
-internally and returns `[]`, so from `get_disaster_info`'s perspective every result is a valid
-list and `all_failed` never becomes `True`. "All three APIs are down" and "confirmed zero
-disasters nearby" produce identical output today.
+`get_disaster_info`'s "all three sources failed" fallback is unreachable in practice — each
+`_fetch_*` catches its own exceptions internally and returns `[]`, so "all three APIs are down" and
+"confirmed zero disasters nearby" produce identical output today. Documented (not fixed) in
+[tests/test_disaster_tool.py](../tests/test_disaster_tool.py).
 
-This is documented in
-[tests/test_disaster_tool.py](../tests/test_disaster_tool.py) —
-`test_all_sources_returning_http_errors_still_reports_safe` pins the current behavior, and
-`test_exception_escaping_a_fetcher_triggers_note_fallback` proves the fallback logic itself works
-when an exception genuinely reaches `asyncio.gather`.
-
-**Fix:** have each `_fetch_*` return `None` on failure and `[]` on a confirmed-empty result, then
-treat `all(r is None for r in results)` as the all-failed case. Update the two tests above once
-changed.
-
-Whether this matters for the demo is a judgment call — arguably telling a user "we couldn't check
-for disasters" vs "no disasters found" is exactly the distinction §8 wanted, and it's a small fix.
+**Fix:** have each `_fetch_*` return `None` on failure vs. `[]` on confirmed-empty, then check
+`all(r is None for r in results)`.
 
 ---
 
-## P3 — Blocked on Member B (raise these, don't wait silently)
+## P2 — Get the DB migration reviewed and applied
 
-### `db_tool.get_user_profile` is an unimplemented stub
+**File:** [docs/db_migrations.sql](db_migrations.sql)
 
-**File:** [app/tools/db_tool.py:327](../app/tools/db_tool.py#L327)
+Written up but **not run against the real Supabase project** — this repo has no direct DB access.
+Needs Member B (or whoever holds Supabase credentials) to review and apply:
+1. `CREATE TABLE IF NOT EXISTS google_oauth_tokens (...)`
+2. `ALTER TABLE traveler_profile ADD COLUMN IF NOT EXISTS default_budget, home_location`
 
-```python
-async def get_user_profile(user_id: str) -> dict:
-    default = {"interests": [], "travel_style": None, "budget": None, "home_location": None}
-    return default
-```
-
-It ignores `user_id` entirely and always returns empty defaults. The §2 defaulting logic in
-[app/utils/slot_filling.py](../app/utils/slot_filling.py) that pulls
-`interests`/`travel_style`/`budget` from the user's profile is written and correct, but currently
-has nothing to read — so BUILD_PLAN §12's second scripted case (`"Plan a trip to Kandy"` → pulls
-preferences from `get_user_profile`) **cannot pass end to end today**, no matter what the
-Orchestrator does.
-
-Tracked in [tests/test_db_tool.py](../tests/test_db_tool.py)
-(`test_get_user_profile_currently_always_returns_defaults`) so this doesn't get forgotten.
-
-### `google_oauth_tokens` table
-
-Calendar tokens currently persist to a local `calendar_tokens.json` file
-([app/tools/calendar_tool.py](../app/tools/calendar_tool.py)) — deliberately interim. It survives
-a restart, which the old in-memory dict didn't, but it won't work across multiple server
-instances and isn't encrypted at rest. The real fix is the Supabase table already requested in
-[member_B.md](member_B.md): `user_id`, `access_token`, `refresh_token`, `token_expiry`, `scope`.
-
-The function signatures (`get_stored_credentials` / `save_credentials`) won't change when it
-lands, so nothing else needs touching.
+Until this runs, `get_user_profile`/calendar token storage keep working exactly as before (falling
+back to defaults / the local JSON file) — nothing is blocked, but nothing actually persists to the
+shared database either.
 
 ---
 
-## P4 — Phase 6 finish: demo
+## P3 — Phase 6 finish: demo
 
-1. Run BUILD_PLAN §12's four scripted inputs end to end against the merged app and record the
-   actual outcomes. Two of them (`"Plan a trip"` → asks for destination; no-GPS → asks for start
-   location) should already pass; the `get_user_profile` one can't until P3 lands.
-2. Bare chat page or a Postman/CLI flow hitting `POST /trip-plan` and rendering the response.
+1. Run BUILD_PLAN §12's scripted inputs end to end and record actual outcomes — all four should
+   now be checkable including the `get_user_profile` one, once P2's migration lands.
+2. Bare chat page or a Postman/CLI flow hitting `POST /trip-plan`.
 3. Demo script / walkthrough for the mentor.
 
 ---
 
-## P5 — Phase 7 (after Phase 6 is solid)
+## P4 — Rate limiting / request queueing (SAD §10.3) — after everything else works end to end
 
-Per §10's suggested split, Member A's half: NestJS backend (JWT auth, user/trip endpoints proxying
-to `POST /trip-plan`, admin endpoints) and the Admin Panel's pending-listings approve/reject view
-— the UI for the `is_verified` flag the data pipeline sets to `false`.
+**Not now.** Only matters once real concurrent traffic gets close to the ~20 req/sec figure SAD
+names — nowhere close to capstone-demo load. Revisit **only if there's time left after P1–P3 and
+the whole pipeline is solid end to end.** If it comes up: a semaphore limiting concurrent
+`/trip-plan` executions is the simple first move; a real task queue (Celery/RQ + Redis — already
+have Redis via `app/utils/cache.py`) is the heavier option if that's not enough.
 
-Don't start this before P1 is settled — NestJS calls §7's contract, so the contract needs to be
-final first.
+---
+
+## P5 — Phase 7 (separate repo, after Phase 6 is solid here)
+
+NestJS backend + Admin Panel — not this repo. The §7 contract this depends on is now settled (P1
+from the previous snapshot, done).
 
 ---
 
 ## Suggested order
 
-1. **P0** (weather timezone, `utcnow`, policy guard decision) — small, no dependencies, and the
-   timezone one is a real user-visible bug.
-2. **P1** (§7 contract) — settle it before anything is built against it.
-3. **P3 messages to Member B** — send these early so they're unblocked in parallel while you work.
-4. **P2** (error matrix) — the natural "is this actually solid?" pass.
-5. **P4** (demo), then **P5** (Phase 7).
+1. **P2** (get the migration reviewed/applied) — send it to Member B now so it's not a last-minute
+   blocker before the demo.
+2. **P1** (error matrix / disaster_tool fix) — the "is this actually solid" pass.
+3. **P3** (demo).
+4. **P4** (rate limiting) — only if time remains after the above.

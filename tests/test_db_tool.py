@@ -1,4 +1,8 @@
 # tests/test_db_tool.py
+import struct
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 from app.tools import db_tool
 
 
@@ -15,11 +19,91 @@ async def test_get_hotels_unknown_destination_returns_empty_not_raises():
     assert hotels == []
 
 
-async def test_get_user_profile_currently_always_returns_defaults():
-    # get_user_profile isn't wired to real (Supabase) user data yet - it's
-    # a stub that always returns the same empty defaults regardless of
-    # user_id. This documents that current state so a future implementer
-    # notices this test needs updating once real profiles land, rather
-    # than the change going unnoticed.
+async def test_get_user_profile_without_supabase_configured_returns_defaults(monkeypatch):
+    # settings.supabase_url/key aren't set in this test environment, so
+    # this exercises the fallback path - same as it would for a fresh
+    # clone with no .env configured yet.
+    monkeypatch.setattr(db_tool.settings, "supabase_url", "")
+    monkeypatch.setattr(db_tool.settings, "supabase_key", "")
+
     profile = await db_tool.get_user_profile("any-user-id")
+
+    assert profile == {"interests": [], "travel_style": None, "budget": None, "home_location": None}
+
+
+class _FakeQuery:
+    def __init__(self, data):
+        self._data = data
+
+    def select(self, *args, **kwargs):
+        return self
+
+    def eq(self, *args, **kwargs):
+        return self
+
+    def limit(self, *args, **kwargs):
+        return self
+
+    async def execute(self):
+        return SimpleNamespace(data=self._data)
+
+
+class _FakeSupabaseClient:
+    def __init__(self, table_data: dict):
+        self._table_data = table_data
+
+    def table(self, name: str):
+        return _FakeQuery(self._table_data.get(name, []))
+
+
+def _make_ewkb_point_hex(lon: float, lat: float) -> str:
+    """Builds a little-endian EWKB Point hex string matching what a real
+    PostGIS geography(Point,4326) column returns via supabase-py, so
+    _parse_ewkb_point has real input to decode."""
+    return struct.pack("<BIIdd", 1, 0x20000001, 4326, lon, lat).hex()
+
+
+def _patch_supabase(monkeypatch, table_data: dict):
+    monkeypatch.setattr(db_tool, "_SUPABASE_AVAILABLE", True)
+    monkeypatch.setattr(db_tool.settings, "supabase_url", "https://fake.supabase.co")
+    monkeypatch.setattr(db_tool.settings, "supabase_key", "fake-key")
+    monkeypatch.setattr(db_tool, "_get_client", AsyncMock(return_value=_FakeSupabaseClient(table_data)))
+
+
+async def test_get_user_profile_from_real_supabase_row(monkeypatch):
+    _patch_supabase(monkeypatch, {
+        "traveler_profile": [{
+            "user_id": "user-1",
+            "travel_interests": ["culture", "food"],
+            "travel_style": "budget",
+            "default_budget": 300.0,
+            "home_location": _make_ewkb_point_hex(lon=79.8612, lat=6.9271),  # Colombo
+        }],
+    })
+
+    profile = await db_tool.get_user_profile("user-1")
+
+    assert profile["interests"] == ["culture", "food"]
+    assert profile["travel_style"] == "budget"
+    assert profile["budget"] == 300.0
+    assert profile["home_location"]["lat"] == 6.9271
+    assert profile["home_location"]["lon"] == 79.8612
+
+
+async def test_get_user_profile_unknown_user_in_real_supabase_returns_defaults(monkeypatch):
+    _patch_supabase(monkeypatch, {"traveler_profile": []})
+
+    profile = await db_tool.get_user_profile("nobody")
+
+    assert profile == {"interests": [], "travel_style": None, "budget": None, "home_location": None}
+
+
+async def test_get_user_profile_supabase_error_falls_back_to_defaults(monkeypatch):
+    monkeypatch.setattr(db_tool, "_SUPABASE_AVAILABLE", True)
+    monkeypatch.setattr(db_tool.settings, "supabase_url", "https://fake.supabase.co")
+    monkeypatch.setattr(db_tool.settings, "supabase_key", "fake-key")
+    monkeypatch.setattr(db_tool, "_get_client", AsyncMock(side_effect=RuntimeError("connection refused")))
+
+    profile = await db_tool.get_user_profile("user-1")
+
     assert profile == {"interests": [], "travel_style": None, "budget": None, "home_location": None}

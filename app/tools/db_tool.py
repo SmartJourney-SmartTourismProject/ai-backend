@@ -324,6 +324,42 @@ async def check_pickme_coverage(lat: float, lon: float) -> bool:
 
 # --- User profile --------------------------------------------------------
 
+def _row_to_profile_dict(row: dict) -> dict:
+    """Maps a real `traveler_profile` row (see SAD §9 Data View's ER diagram)
+    onto the shape slot_filling.py's defaulting logic expects."""
+    lat, lon = _parse_ewkb_point(row.get("home_location"))
+    return {
+        "interests": row.get("travel_interests") or [],
+        "travel_style": row.get("travel_style"),
+        "budget": row.get("default_budget"),
+        "home_location": {"lat": lat, "lon": lon} if lat is not None else None,
+    }
+
+
 async def get_user_profile(user_id: str) -> dict:
+    """
+    Returns a traveler's saved preferences for slot_filling.py's §2
+    defaulting logic (destination-only request -> pull interests/travel_style/
+    budget from here instead of re-asking). Tries Supabase's `traveler_profile`
+    table first, falls back to empty defaults - same pattern as every other
+    lookup in this file.
+    """
     default = {"interests": [], "travel_style": None, "budget": None, "home_location": None}
+
+    if _SUPABASE_AVAILABLE and settings.supabase_url and settings.supabase_key:
+        try:
+            client = await _get_client()
+            if client:
+                response = await (
+                    client.table("traveler_profile")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if response.data:
+                    return _row_to_profile_dict(response.data[0])
+        except Exception as e:
+            logger.warning(f"Supabase profile query failed for user '{user_id}', using defaults: {e}")
+
     return default

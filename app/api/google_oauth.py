@@ -60,6 +60,8 @@ async def google_callback(code: str = Query(...), state: str = Query(...)):
     await save_credentials(user_id, {
         "access_token": creds.token,
         "refresh_token": creds.refresh_token,
+        "token_expiry": creds.expiry.isoformat() if creds.expiry else None,
+        "scope": " ".join(creds.scopes or SCOPES),
     })
 
     return {"status": "connected", "user_id": user_id}

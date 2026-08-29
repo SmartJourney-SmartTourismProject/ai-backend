@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from app.config.settings import settings
 from app.core.state import TripState
 from app.core.orchestrator import orchestrator
 from app.tools.location_tool import resolve_start_location
@@ -19,7 +20,11 @@ class ClientGPS(BaseModel):
 
 
 class TripPlanRequest(BaseModel):
-    user_input: str
+    # Named "message" (not "user_input") to match BUILD_PLAN.md §7's API
+    # contract - internally this still becomes TripState.user_input,
+    # since that name is used throughout the Orchestrator/agents and
+    # renaming it there would ripple through every file that reads it.
+    message: str
     language: str = "en"
     user_id: Optional[str] = None
     client_gps: Optional[ClientGPS] = None
@@ -40,6 +45,7 @@ class TripPlanResponse(BaseModel):
     disaster: Optional[dict] = None
     final_response: Optional[str] = None
     errors: list[str] = []
+    # Debug-only field, per §7 - never populated unless settings.debug=True.
     completed_steps: list[str] = []
 
 
@@ -66,7 +72,7 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
     carried_over = load_session(session_id) if payload.session_id else None
 
     initial_state = TripState(
-        user_input=payload.user_input,
+        user_input=payload.message,
         language=payload.language,
         session_id=session_id,
         is_followup=carried_over is not None,
@@ -93,16 +99,17 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
         disaster=result.get("disaster"),
         final_response=result.get("final_response"),
         errors=result.get("errors", []),
-        completed_steps=result.get("completed_steps", []),
+        completed_steps=result.get("completed_steps", []) if settings.debug else [],
     )
 
 # -----------------------------------------------------------------------------
 # API DESIGN NOTES & BEST PRACTICES
 # -----------------------------------------------------------------------------
-# 1. State Encapsulation: 
-# TripPlanResponse exposes only a curated subset of TripState. Internal-only 
-# fields (e.g., candidate_attractions, completed_steps for debug) are hidden. 
-# This ensures we never dump internal state objects straight out of the API 
+# 1. State Encapsulation:
+# TripPlanResponse exposes only a curated subset of TripState. Internal-only
+# fields (e.g., candidate_attractions) are never exposed at all; completed_steps
+# is a debug field only populated when settings.debug=True (see below). This
+# ensures we never dump internal state objects straight out of the API
 # to the consumer (Flutter/Next.js frontend).
 #
 # 2. Client IP & Proxies (Phase 7 Deployment Note):

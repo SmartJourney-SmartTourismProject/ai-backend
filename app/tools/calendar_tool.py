@@ -1,7 +1,9 @@
 # app/tools/calendar_tool.py
 import json
+import logging
 from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
+from typing import Optional
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -9,19 +11,43 @@ from googleapiclient.discovery import build
 
 from app.config.settings import settings
 
+# Try to import supabase, but make it optional - same pattern as db_tool.py.
+try:
+    from supabase import acreate_client, AsyncClient
+    _SUPABASE_AVAILABLE = True
+except ImportError:
+    _SUPABASE_AVAILABLE = False
+    acreate_client = None
+    AsyncClient = None
+
+logger = logging.getLogger(__name__)
+
 SCOPES = ["https://www.googleapis.com/auth/calendar.freebusy"]
 
 
 # --- Credential storage -------------------------------------------------
-# TODO(Member B): move this to a real DB table (google_oauth_tokens) once
-# Supabase is wired in - see handoff note in member_B.md. Until then, a
-# local JSON file so tokens survive an app restart instead of resetting
-# every time like the previous in-memory dict did. Not safe for multiple
-# server instances (no locking, no shared storage) - fine for local dev.
+# Real persistence: Supabase's `google_oauth_tokens` table (user_id,
+# access_token, refresh_token, token_expiry, scope - see member_B.md).
+# Falls back to a local JSON file when Supabase isn't configured (e.g. a
+# fresh clone with no .env yet), so this still works without a database -
+# it just won't survive across multiple server instances or, if Supabase
+# itself is down, past this process's restart.
 _CREDENTIAL_STORE_PATH = Path(__file__).resolve().parent.parent.parent / "calendar_tokens.json"
 
+_client: Optional["AsyncClient"] = None
 
-def _load_store() -> dict:
+
+async def _get_client() -> Optional["AsyncClient"]:
+    """Lazily create and cache a single AsyncClient for the process."""
+    global _client
+    if not _SUPABASE_AVAILABLE or not settings.supabase_url or not settings.supabase_key:
+        return None
+    if _client is None:
+        _client = await acreate_client(settings.supabase_url, settings.supabase_key)
+    return _client
+
+
+def _load_local_store() -> dict:
     if not _CREDENTIAL_STORE_PATH.exists():
         return {}
     try:
@@ -30,18 +56,53 @@ def _load_store() -> dict:
         return {}
 
 
-def _save_store(store: dict) -> None:
+def _save_local_store(store: dict) -> None:
     _CREDENTIAL_STORE_PATH.write_text(json.dumps(store, indent=2))
 
 
 async def get_stored_credentials(user_id: str) -> dict | None:
-    return _load_store().get(user_id)
+    try:
+        client = await _get_client()
+        if client:
+            response = await (
+                client.table("google_oauth_tokens")
+                .select("*")
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            if response.data:
+                row = response.data[0]
+                return {
+                    "access_token": row.get("access_token"),
+                    "refresh_token": row.get("refresh_token"),
+                    "token_expiry": row.get("token_expiry"),
+                    "scope": row.get("scope"),
+                }
+    except Exception as e:
+        logger.warning(f"Supabase token lookup failed for user '{user_id}', trying local store: {e}")
+
+    return _load_local_store().get(user_id)
 
 
 async def save_credentials(user_id: str, creds: dict) -> None:
-    store = _load_store()
+    try:
+        client = await _get_client()
+        if client:
+            await client.table("google_oauth_tokens").upsert({
+                "user_id": user_id,
+                "access_token": creds.get("access_token"),
+                "refresh_token": creds.get("refresh_token"),
+                "token_expiry": creds.get("token_expiry"),
+                "scope": creds.get("scope"),
+            }).execute()
+            return
+    except Exception as e:
+        logger.warning(f"Supabase token save failed for user '{user_id}', falling back to local store: {e}")
+
+    store = _load_local_store()
     store[user_id] = creds
-    _save_store(store)
+    _save_local_store(store)
 # ------------------------------------------------------------------------
 
 
@@ -106,6 +167,8 @@ async def get_free_days(user_id: str, search_window_days: int = 30) -> list[dict
             await save_credentials(user_id, {
                 "access_token": google_creds.token,
                 "refresh_token": google_creds.refresh_token,
+                "token_expiry": google_creds.expiry.isoformat() if google_creds.expiry else None,
+                "scope": stored.get("scope"),
             })
 
         service = build("calendar", "v3", credentials=google_creds)
