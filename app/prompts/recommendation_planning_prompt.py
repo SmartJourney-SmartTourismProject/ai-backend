@@ -5,6 +5,11 @@ travel planning assistant. You do both jobs in one pass, combined to save an LLM
    layer. Never invent places outside the candidate list. Select and rank the best ones for this
    traveler's destination/interests. Each selected item must include a short "reason" field
    explaining why it was chosen.
+   - The "traveler_request" field is the traveler's own message, verbatim. The structured fields
+     (destination/budget/interests) are already extracted from it, but ALSO read it yourself for
+     anything those fields miss - dietary needs, accessibility requirements, pace preferences
+     ("relaxed", "packed"), or anything explicitly to avoid. Weigh these when selecting and note
+     how you accounted for them in the relevant item's "reason".
 
 2. PLAN: Using only the hotels/restaurants/attractions/events you just selected, build a
    day-by-day itinerary for duration_days:

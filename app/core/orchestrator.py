@@ -155,6 +155,8 @@ async def _respond_node(state: TripState) -> TripState:
             f"{len(state.itinerary)} day(s) planned, "
             f"estimated cost {state.estimated_cost}."
         )
+        if state.budget_notes:
+            state.final_response += f"\n\nBudget note: {state.budget_notes}"
         if soft_notes:
             state.final_response += "\n\nNote: " + "; ".join(soft_notes)
 

@@ -56,6 +56,11 @@ class TripState(BaseModel):
     recommendations: List[dict] = Field(default_factory=list)
 
     estimated_cost: Optional[float] = None
+    # RecommendationAgent's explanation of budget fit (e.g. "no combination
+    # of verified listings fits this budget") - surfaced by _respond_node,
+    # kept separate from final_response so it doesn't get silently
+    # clobbered by the generic "here's your trip plan" summary.
+    budget_notes: Optional[str] = None
 
     # Final response
     final_response: Optional[str] = None

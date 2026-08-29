@@ -100,12 +100,18 @@ class RecommendationAgent(BaseAgent):
             "candidate_restaurants": restaurants,
             "candidate_attractions": attractions,
             "candidate_events": events,
+            # The traveler's own words, on every call - structured fields
+            # (destination/budget/interests) miss anything that doesn't map
+            # to a tag, e.g. "no hiking, my knees are bad" or "vegetarian
+            # only". Passing the raw message lets the LLM pick up on
+            # special requirements slot_filling was never meant to catch.
+            "traveler_request": state.user_input,
         }
 
         # Multi-turn: on a follow-up message ("swap the temple for something
         # indoors", "make day 2 cheaper"), hand the LLM the itinerary it
-        # already built plus the traveler's raw request, so it refines that
-        # plan instead of silently rebuilding a fresh one from scratch. See
+        # already built too, so it refines that plan instead of silently
+        # rebuilding a fresh one from scratch. See
         # RECOMMENDATION_PLANNING_SYSTEM_PROMPT's "MODIFICATION REQUESTS" rule.
         if state.is_followup and state.itinerary:
             payload["previous_itinerary"] = state.itinerary
@@ -140,7 +146,7 @@ class RecommendationAgent(BaseAgent):
             # 5. Assign planning outputs back to state (previously PlanningAgent's job)
             state.itinerary = parsed.get("itinerary", [])
             state.estimated_cost = parsed.get("estimated_cost", 0.0)
-            state.final_response = parsed.get("budget_notes", "")
+            state.budget_notes = parsed.get("budget_notes") or None
 
             return AgentResult(success=True, message=f"Recommendations and itinerary built for {destination}.")
 

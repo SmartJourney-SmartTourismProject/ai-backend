@@ -35,6 +35,7 @@ class TripPlanResponse(BaseModel):
     destination: Optional[str] = None
     itinerary: list = []
     estimated_cost: Optional[float] = None
+    budget_notes: Optional[str] = None
     weather: Optional[dict] = None
     disaster: Optional[dict] = None
     final_response: Optional[str] = None
@@ -87,6 +88,7 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
         destination=result.get("destination"),
         itinerary=result.get("itinerary", []),
         estimated_cost=result.get("estimated_cost"),
+        budget_notes=result.get("budget_notes"),
         weather=result.get("weather"),
         disaster=result.get("disaster"),
         final_response=result.get("final_response"),
