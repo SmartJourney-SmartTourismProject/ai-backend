@@ -6,6 +6,7 @@ import pytest
 import app.tools.calendar_tool as calendar_tool
 import app.tools.weather_tool as weather_tool
 import app.tools.disaster_tool as disaster_tool
+import app.utils.session_store as session_store
 
 
 class _FakeCache:
@@ -46,3 +47,9 @@ def _isolate_calendar_token_store(tmp_path, monkeypatch):
     for every test, so tests never read/write the real calendar_tokens.json
     and never leak state between tests."""
     monkeypatch.setattr(calendar_tool, "_CREDENTIAL_STORE_PATH", tmp_path / "calendar_tokens.json")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_session_store(tmp_path, monkeypatch):
+    """Same isolation as above, for the multi-turn conversation session store."""
+    monkeypatch.setattr(session_store, "_SESSION_STORE_PATH", tmp_path / "trip_sessions.json")

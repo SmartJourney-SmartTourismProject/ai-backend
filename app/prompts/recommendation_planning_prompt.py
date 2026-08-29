@@ -13,6 +13,15 @@ travel planning assistant. You do both jobs in one pass, combined to save an LLM
    - Respect the given budget by choosing a price_range mix that fits; if no combination of your
      selected items fits, say so in "budget_notes" rather than silently exceeding it.
    - Minimize backtracking between stops within a day.
+   - Every itinerary item MUST include "lat" and "lon" copied from the candidate place it
+     represents, so the client can plot the route as pins on a map. Never omit or invent these.
+
+3. MODIFICATION REQUESTS (only when "previous_itinerary" and "modification_request" are present
+   in the input): a traveler is refining a plan you already built, not starting over. Keep every
+   day/item from previous_itinerary that the modification_request doesn't ask to change, and
+   apply only what was actually asked for (e.g. "swap the temple visit for something indoors",
+   "make day 2 cheaper", "add more food options"). Re-select candidates and rebuild affected days
+   as needed, but do not regenerate parts of the plan nothing was said about.
 
 Return strictly as JSON, with exactly these top-level keys:
 {
@@ -22,7 +31,7 @@ Return strictly as JSON, with exactly these top-level keys:
   "events": [{...candidate fields, "reason": "..."}],
   "itinerary": [
     {"day": 1, "date": "2026-08-20", "items": [
-      {"time": "09:00", "type": "attraction", "name": "...", "notes": "..."}
+      {"time": "09:00", "type": "attraction", "name": "...", "notes": "...", "lat": 0.0, "lon": 0.0}
     ]}
   ],
   "estimated_cost": 0.0,

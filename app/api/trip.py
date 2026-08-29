@@ -67,14 +67,14 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
     initial_state = TripState(
         user_input=payload.user_input,
         language=payload.language,
-        user_id=payload.user_id,
-        start_location=start_location,
         session_id=session_id,
         is_followup=carried_over is not None,
         **(carried_over or {}),
     )
-    # start_location resolved above always wins over a carried-over one -
-    # the traveler's location this turn is more current than last turn's.
+    # This turn's freshly-resolved values always win over carried-over ones:
+    # a new user_id/GPS fix is more current than what a prior turn recorded.
+    if payload.user_id:
+        initial_state.user_id = payload.user_id
     if start_location:
         initial_state.start_location = start_location
 

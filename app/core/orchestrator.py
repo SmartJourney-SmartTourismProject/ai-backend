@@ -1,7 +1,7 @@
 #Graph Edges validate → policy → location → calendar → context → recommend → plan → respond
 # app/core/orchestrator.py
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from langgraph.graph import StateGraph, END
 
@@ -95,7 +95,7 @@ async def _context_node(state: TripState) -> TripState:
         # No calendar connected - default to today + duration_days (or 1
         # day) so weather/disaster still get checked for *some* dates.
         span = state.duration_days or 1
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         dates = [(today + timedelta(days=i)).isoformat() for i in range(span)]
 
     state.weather, state.disaster = await asyncio.gather(

@@ -105,6 +105,56 @@ async def test_already_set_fields_are_not_overwritten(monkeypatch):
     assert result.budget == 500.0
 
 
+async def test_followup_overwrites_already_set_fields(monkeypatch):
+    # On a follow-up turn (is_followup=True), an extracted value should
+    # OVERWRITE the carried-over one - "make it cheaper" must actually
+    # change budget, unlike the first-turn "don't overwrite" behavior
+    # tested above.
+    _patch_llm(monkeypatch, _ExtractedSlots(budget=600.0))
+    state = TripState(
+        user_input="Actually make the budget 600 dollars instead",
+        destination="Kandy", budget=300.0, duration_days=2,
+        is_followup=True,
+    )
+
+    result = await fill_slots(state)
+
+    assert result.budget == 600.0
+    assert result.destination == "Kandy"  # untouched field stays as carried over
+
+
+async def test_followup_skips_defaulting_and_clarification(monkeypatch):
+    # Destination-only defaulting, profile backfill, and the "ask for a
+    # destination" clarification are first-turn-only concerns - a follow-up
+    # already has a full state from the previous turn.
+    _patch_llm(monkeypatch, _ExtractedSlots())
+    state = TripState(
+        user_input="Add more food options please",
+        destination="Kandy", duration_days=2, user_id="demo-user-1",
+        is_followup=True,
+    )
+
+    result = await fill_slots(state)
+
+    assert result.duration_days == 2  # not reset to 1
+    assert result.clarification_needed is None
+
+
+async def test_followup_empty_extraction_leaves_fields_untouched(monkeypatch):
+    _patch_llm(monkeypatch, _ExtractedSlots())
+    state = TripState(
+        user_input="Sounds great, thanks!",
+        destination="Kandy", budget=300.0, interests=["culture"],
+        is_followup=True,
+    )
+
+    result = await fill_slots(state)
+
+    assert result.destination == "Kandy"
+    assert result.budget == 300.0
+    assert result.interests == ["culture"]
+
+
 async def test_llm_failure_degrades_without_raising(monkeypatch):
     monkeypatch.setattr(
         slot_filling_module, "ChatGoogleGenerativeAI",

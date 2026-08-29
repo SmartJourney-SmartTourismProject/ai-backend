@@ -1,6 +1,5 @@
 # app/tools/weather_tool.py
 from collections import defaultdict
-from datetime import datetime
 
 import httpx
 
@@ -66,7 +65,11 @@ async def get_weather(lat: float, lon: float, dates: list[str]) -> dict | None:
         # Group the 3-hour slices by calendar date
         by_date: dict[str, list[dict]] = defaultdict(list)
         for slice_ in forecast_data.get("list", []):
-            slice_date = datetime.fromtimestamp(slice_["dt"]).date().isoformat()
+            # dt_txt is already a UTC date string from OpenWeather - using
+            # it (instead of fromtimestamp(), which applies the SERVER's
+            # local timezone) avoids forecast days silently shifting or
+            # dropping depending on where this runs.
+            slice_date = slice_["dt_txt"].split(" ")[0]
             by_date[slice_date].append(slice_)
 
         wanted_dates = set(dates) if dates else set(by_date.keys())

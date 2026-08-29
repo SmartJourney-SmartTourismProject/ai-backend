@@ -102,6 +102,15 @@ class RecommendationAgent(BaseAgent):
             "candidate_events": events,
         }
 
+        # Multi-turn: on a follow-up message ("swap the temple for something
+        # indoors", "make day 2 cheaper"), hand the LLM the itinerary it
+        # already built plus the traveler's raw request, so it refines that
+        # plan instead of silently rebuilding a fresh one from scratch. See
+        # RECOMMENDATION_PLANNING_SYSTEM_PROMPT's "MODIFICATION REQUESTS" rule.
+        if state.is_followup and state.itinerary:
+            payload["previous_itinerary"] = state.itinerary
+            payload["modification_request"] = state.user_input
+
         prompt = (
             f"{self.system_prompt}\n\n"
             f"Candidate Data:\n{json.dumps(payload, indent=2)}\n\n"
