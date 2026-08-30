@@ -155,6 +155,77 @@ async def test_followup_empty_extraction_leaves_fields_untouched(monkeypatch):
     assert result.interests == ["culture"]
 
 
+async def test_origin_location_is_geocoded_when_start_location_missing(monkeypatch):
+    _patch_llm(monkeypatch, _ExtractedSlots(destination="Kandy", origin_location="Polonnaruwa"))
+    monkeypatch.setattr(
+        slot_filling_module, "geocode_destination",
+        AsyncMock(return_value={"lat": 7.9403, "lon": 81.0188}),
+    )
+    state = TripState(user_input="Plan a trip to Kandy, I'm starting from Polonnaruwa")
+
+    result = await fill_slots(state)
+
+    assert result.start_location == {"lat": 7.9403, "lon": 81.0188, "source": "text"}
+
+
+async def test_origin_location_does_not_override_existing_start_location(monkeypatch):
+    # GPS/IP resolution (done by the API layer before this ever runs) is
+    # more precise than geocoding a place name from text, so it always wins.
+    _patch_llm(monkeypatch, _ExtractedSlots(destination="Kandy", origin_location="Polonnaruwa"))
+    geocode_mock = AsyncMock(return_value={"lat": 7.9403, "lon": 81.0188})
+    monkeypatch.setattr(slot_filling_module, "geocode_destination", geocode_mock)
+    state = TripState(
+        user_input="Plan a trip to Kandy, I'm starting from Polonnaruwa",
+        start_location={"lat": 6.9271, "lon": 79.8612, "source": "gps"},
+    )
+
+    result = await fill_slots(state)
+
+    assert result.start_location == {"lat": 6.9271, "lon": 79.8612, "source": "gps"}
+    geocode_mock.assert_not_called()
+
+
+async def test_origin_geocode_failure_leaves_start_location_unset(monkeypatch):
+    _patch_llm(monkeypatch, _ExtractedSlots(destination="Kandy", origin_location="Nowhereville"))
+    monkeypatch.setattr(slot_filling_module, "geocode_destination", AsyncMock(return_value=None))
+    state = TripState(user_input="Plan a trip to Kandy, starting from Nowhereville")
+
+    result = await fill_slots(state)
+
+    assert result.start_location is None
+
+
+async def test_no_origin_mentioned_does_not_call_geocode(monkeypatch):
+    _patch_llm(monkeypatch, _ExtractedSlots(destination="Kandy"))
+    geocode_mock = AsyncMock(return_value={"lat": 1.0, "lon": 1.0})
+    monkeypatch.setattr(slot_filling_module, "geocode_destination", geocode_mock)
+    state = TripState(user_input="Plan a trip to Kandy")
+
+    result = await fill_slots(state)
+
+    assert result.start_location is None
+    geocode_mock.assert_not_called()
+
+
+async def test_origin_location_works_on_followup_turn(monkeypatch):
+    # The exact scenario found during manual demo testing: origin mentioned
+    # in a later message, after the destination was already set on turn 1.
+    _patch_llm(monkeypatch, _ExtractedSlots(origin_location="Polonnaruwa"))
+    monkeypatch.setattr(
+        slot_filling_module, "geocode_destination",
+        AsyncMock(return_value={"lat": 7.9403, "lon": 81.0188}),
+    )
+    state = TripState(
+        user_input="I'm starting from Polonnaruwa",
+        destination="Kandy", duration_days=3, is_followup=True,
+    )
+
+    result = await fill_slots(state)
+
+    assert result.destination == "Kandy"  # unaffected
+    assert result.start_location == {"lat": 7.9403, "lon": 81.0188, "source": "text"}
+
+
 async def test_llm_failure_degrades_without_raising(monkeypatch):
     monkeypatch.setattr(
         slot_filling_module, "ChatGoogleGenerativeAI",

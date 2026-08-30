@@ -7,6 +7,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from app.config.settings import settings
 from app.core.state import TripState
 from app.tools import db_tool
+from app.tools.geocode_tool import geocode_destination
 
 
 
@@ -37,6 +38,16 @@ class _ExtractedSlots(BaseModel):
             "'hiking trips'). Empty list if none mentioned."
         ),
     )
+    origin_location: Optional[str] = Field(
+        None, description=(
+            "The place the traveler says they are starting/departing FROM, "
+            "if explicitly mentioned (e.g. 'I'm starting from Polonnaruwa', "
+            "'coming from Colombo', 'leaving from the airport'). This is the "
+            "traveler's ORIGIN, not their destination - never confuse the "
+            "two, and never guess this from the destination alone. Null if "
+            "no starting location was mentioned."
+        )
+    )
 
 
 _SYSTEM_PROMPT = """You extract structured trip-planning details from a
@@ -57,7 +68,12 @@ interests) — do not use a "reasonable default." A missing value is the
 correct output when the user didn't say anything about that field.
 
 When listing interests, use short singular lowercase tags (e.g. "beach",
-"hike", "culture") - not plurals or full phrases."""
+"hike", "culture") - not plurals or full phrases.
+
+If the traveler mentions where they are starting/departing from - their
+origin, separate from their destination - extract it as origin_location.
+Do not confuse origin with destination; if only a destination is
+mentioned, leave origin_location null."""
 
 
 async def fill_slots(state: TripState) -> TripState:
@@ -115,6 +131,21 @@ async def fill_slots(state: TripState) -> TripState:
                 state.travelers = result.travelers
             if not state.interests and result.interests:
                 state.interests = result.interests
+
+        # A named origin only matters when we don't already have a real
+        # start_location - GPS/IP resolution (done by the API layer before
+        # this ever runs) is more precise than geocoding a place name, so
+        # it always takes priority. This applies on both first turns and
+        # follow-ups: "I'm starting from Polonnaruwa" is exactly as useful
+        # said on message 2 as on message 1, whenever GPS/IP failed.
+        if state.start_location is None and result.origin_location:
+            origin_coords = await geocode_destination(result.origin_location)
+            if origin_coords:
+                state.start_location = {
+                    "lat": origin_coords["lat"],
+                    "lon": origin_coords["lon"],
+                    "source": "text",
+                }
 
     except Exception as e:
         state.errors.append(f"slot_filling failed: {e}")

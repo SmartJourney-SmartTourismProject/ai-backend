@@ -24,7 +24,7 @@ class TripState(BaseModel):
     budget: Optional[float] = None
     travelers: Optional[int] = None
     user_id: Optional[str] = None
-    start_location: Optional[dict] = None    # {"lat": float, "lon": float, "source": "gps"|"ip"}
+    start_location: Optional[dict] = None    # {"lat": float, "lon": float, "source": "gps"|"ip"|"text"}
     trip_dates: Optional[List[dict]] = None  # [{"start_date": "...", "end_date": "..."}]
 
     # User preferences
