@@ -41,6 +41,9 @@ class _FakeQuery:
     def eq(self, *args, **kwargs):
         return self
 
+    def ilike(self, *args, **kwargs):
+        return self
+
     def limit(self, *args, **kwargs):
         return self
 
@@ -107,3 +110,53 @@ async def test_get_user_profile_supabase_error_falls_back_to_defaults(monkeypatc
     profile = await db_tool.get_user_profile("user-1")
 
     assert profile == {"interests": [], "travel_style": None, "budget": None, "home_location": None}
+
+
+async def test_get_hotels_from_real_supabase(monkeypatch):
+    # _resolve_id looks up district/category ids by name before the
+    # travel_listing query itself.
+    _patch_supabase(monkeypatch, {
+        "district": [{"id": "district-kandy"}],
+        "category": [{"id": "category-hotel"}],
+        "travel_listing": [{
+            "id": "listing-1", "name": "Real Supabase Hotel", "description": "A real listing",
+            "price_range": "$$", "location": _make_ewkb_point_hex(lon=80.6337, lat=7.2906),
+            "rating": 4.5, "photo_url": "https://example.com/photo.jpg",
+            "opening_hours": "24 hours", "has_public_transit": True,
+            "nearest_transit_stop": "Kandy Station", "pickme_available": True,
+        }],
+    })
+
+    hotels = await db_tool.get_hotels("Kandy")
+
+    assert len(hotels) == 1
+    assert hotels[0]["name"] == "Real Supabase Hotel"
+    assert hotels[0]["lat"] == 7.2906
+    assert hotels[0]["lon"] == 80.6337
+
+
+async def test_get_hotels_supabase_error_falls_back_to_mock_data(monkeypatch):
+    monkeypatch.setattr(db_tool, "_SUPABASE_AVAILABLE", True)
+    monkeypatch.setattr(db_tool.settings, "supabase_url", "https://fake.supabase.co")
+    monkeypatch.setattr(db_tool.settings, "supabase_key", "fake-key")
+    monkeypatch.setattr(db_tool, "_get_client", AsyncMock(side_effect=RuntimeError("connection refused")))
+
+    hotels = await db_tool.get_hotels("Kandy")
+
+    # Falls through to the same mock data test_get_hotels_shape checks.
+    assert len(hotels) > 0
+    assert all("id" in h and "name" in h for h in hotels)
+
+
+async def test_get_hotels_supabase_returns_nothing_falls_back_to_mock_data(monkeypatch):
+    # District/category resolved fine, but zero verified listings for them -
+    # a legitimately empty real result, not an error.
+    _patch_supabase(monkeypatch, {
+        "district": [{"id": "district-kandy"}],
+        "category": [{"id": "category-hotel"}],
+        "travel_listing": [],
+    })
+
+    hotels = await db_tool.get_hotels("Kandy")
+
+    assert len(hotels) > 0  # mock fallback, not an empty list

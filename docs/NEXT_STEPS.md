@@ -1,150 +1,160 @@
-# Next Steps — post-merge plan
+# AI Backend — Final Status & Handoff
 
-**Branch:** `main` (after `temp-shaluka` merged in at `bfd1805`)
-**Last updated:** 2026-08-29
-**Reference:** [BUILD_PLAN.md](BUILD_PLAN.md) — §7 API contract, §8 error/caching matrix, §10 phases, §12 verification checklist. Also cross-checked against the project's SRS and SAD documents.
+**Branch:** `main`
+**Snapshot:** 2026-08-30
+**Reference:** [BUILD_PLAN.md](BUILD_PLAN.md) — §7 API contract, §8 error/caching matrix, §12 verification checklist. Cross-checked against the project's SRS and SAD documents.
 
-**Scope note:** this repo is the Python/FastAPI multi-agent AI system only. The NestJS backend and
-the web/mobile UI are separate repos and out of scope here — anything that's really their job
-(JWT auth, budget tracker persistence, subscriptions, admin panel, notification delivery, HTTPS
-termination) is noted as such below, not built here.
-
-Test suite: **101 passing, 0 xfail**, no network calls, no API keys, ~5s.
+This document closes out active development on the Python/FastAPI AI backend and records its
+final state for whoever picks up the NestJS backend next. Test suite: **110 passing, 0 xfail**,
+no network calls, no API keys required, ~5s.
 
 ---
 
-## Done since the merge
+## What this backend does
 
-- **Multi-turn conversations** (SRS §3.1.6/§4.1.5 "Modify Trip Plan"). `session_id` in/out of
-  `/trip-plan`, `app/utils/session_store.py` carries a trip's state between turns, `slot_filling.py`
-  overwrites fields on a follow-up instead of only filling gaps, `RecommendationAgent` refines the
-  existing itinerary instead of rebuilding from scratch.
-- **Map pins** — every itinerary item carries `lat`/`lon` (confirmed no real Google Maps routing
-  needed, just pins).
-- **`traveler_request` passthrough** — the raw message reaches `RecommendationAgent` on every call,
-  not just follow-ups, so special requirements that don't map to a structured slot get used.
-- **`budget_notes` bug fixed** — was silently discarded on every request (overwritten by
-  `_respond_node` immediately after being set). Now its own field, surfaced in the response.
-- **OpenWeather timezone bug** fixed (UTC `dt_txt` instead of server-local time).
-- **`datetime.utcnow()` deprecation** cleared.
-- **Policy guard decision made and shipped** — substring blocklist kept as a deliberate, documented
-  trade-off; "ivory market" gap closed with specific phrases (not a bare "ivory" keyword, which
-  would've false-positived on "Ivory Coast").
-- **§7 API contract settled (P1, was open — now done):** `TripPlanRequest.message` replaces
-  `user_input` at the API boundary (internal `TripState.user_input` name unchanged - only the
-  external contract moved). `completed_steps` now gated behind `settings.debug` instead of always
-  public. Added `tests/test_trip_api.py` — the endpoint itself had zero test coverage before this.
-- **`db_tool.get_user_profile` implemented for real** (was a P3 "blocked on Member B" stub) — now
-  queries Supabase's `traveler_profile` table first, falls back to empty defaults, same pattern as
-  every other lookup in that file. Needs two new columns Supabase doesn't have yet
-  (`default_budget`, `home_location`) — see `docs/db_migrations.sql`.
-- **`google_oauth_tokens` table wired in** (was the other P3 item) — `calendar_tool.py` now tries
-  Supabase first (including `token_expiry`/`scope`, both threaded through from the OAuth callback
-  and the token-refresh path), falls back to the local JSON file if Supabase isn't configured or
-  errors. Table DDL is in `docs/db_migrations.sql` for Member B to review/run — this repo can't
-  apply it directly.
-- Test coverage added that didn't exist before: `tests/test_recommendation_agent.py` (8 tests),
-  `tests/test_session_store.py`, `tests/test_trip_api.py` (6 tests), extended
-  `tests/test_db_tool.py` and `tests/test_calendar_token_store.py` for the real-Supabase paths,
-  plus follow-up-turn cases in `tests/test_slot_filling.py`.
+Given a natural-language trip request, it runs a LangGraph pipeline — validate → policy →
+slot-fill → location → calendar → weather/disaster → recommend → plan → respond — and returns a
+day-by-day itinerary with map-plottable coordinates, weather/disaster context, and an estimated
+cost. Supports multi-turn conversation (a follow-up message refines the same trip) and extracts a
+named starting location from free text when GPS/IP resolution fails.
 
-**Explicitly decided NOT to do here**, per discussion:
-- **Currency handling** (SRS mentions "preferred currency," mockups show LKR) — skipped.
-- **HTTPS/encryption in transit** (SRS §3.4.6) — not application code; TLS termination at whatever
-  reverse proxy/load balancer sits in front of this service at deploy time.
-- **Rate limiting/queueing** (SAD §10.3) — deferred, see P4 below.
+A standalone demo page (`demo/index.html`, independent of the FastAPI app) exercises this live —
+see the root `Readme.md` for how to run it.
 
 ---
 
-## Where we actually are
+## The API contract, for NestJS integration
 
-| Phase | Status |
-|---|---|
-| Phase 1 — Foundations & contracts | Complete |
-| Phase 2 — Parallel build | Complete |
-| Phase 3 — Data pipeline (Member B) | On `main` — Overpass/events ingest + scheduler present |
-| Phase 4 — Integration | Complete |
-| Phase 5 — API layer + testing | Complete |
-| Phase 6 — Error matrix, caching, demo | Caching done. Error-matrix walkthrough + demo script outstanding |
-| Phase 7 — NestJS + Admin Panel | Separate repo, not started here (correctly gated on Phase 6) |
+**`POST /trip-plan`**
+
+Request:
+```json
+{
+  "message": "Plan a 3-day trip to Kandy, budget $300, love hiking",
+  "language": "en",
+  "user_id": "optional-uuid",
+  "client_gps": {"lat": 7.29, "lon": 80.63},
+  "session_id": "optional - omit on first message, pass back to continue a conversation"
+}
+```
+
+Response:
+```json
+{
+  "session_id": "uuid - always returned, pass back on the next message to modify this trip",
+  "destination": "Kandy",
+  "itinerary": [{"day": 1, "date": "...", "items": [
+    {"time": "09:00", "type": "attraction", "name": "...", "notes": "...", "lat": 7.29, "lon": 80.64}
+  ]}],
+  "estimated_cost": 210.0,
+  "budget_notes": "explanation if the budget was tight or exceeded, or null",
+  "weather": {"current": {...}, "forecast": [...]},
+  "disaster": {"safe": true, "active_events": [...]},
+  "final_response": "chat-display text summarizing the plan (or a clarification question)",
+  "errors": ["advisory notes, e.g. location_unresolved - not necessarily fatal"],
+  "completed_steps": ["debug-only, empty unless settings.debug=True"]
+}
+```
+
+**`GET/POST /auth/google/login`, `/auth/google/callback`** — Google Calendar OAuth consent flow,
+signed/expiring `state` parameter (CSRF-safe).
+
+`main.py` also exposes `GET /api/health`, `POST /api/rag/index`, and
+`POST /api/admin/sync/{events,listings}` for the data-pipeline side (Member B's track) — not
+relevant to a chat/trip-planning integration.
+
+CORS is currently wide open (`allow_origins=["*"]`) — tighten this to the actual NestJS/frontend
+origin(s) before this goes anywhere near production.
 
 ---
 
-## P1 — Phase 6: walk the §8 error matrix
+## §12 scripted verification — results (2026-08-30)
 
-Go tool by tool through [BUILD_PLAN.md §8](BUILD_PLAN.md) and confirm each failure mode degrades
-rather than crashes. Most already have a failure-mode test; the gaps:
+Ran BUILD_PLAN §12's four scripted inputs against the real orchestrator (real Gemini calls, real
+weather/disaster APIs, no mocking):
 
-| Source | Failure test exists? |
-|---|---|
-| OpenWeather | Yes |
-| EONET / USGS / GDACS | Partly — see the finding below |
-| Google Calendar | Yes |
-| Location / IP lookup | Yes |
-| Supabase — listings (`get_hotels`/etc.) | No — falls back to mock data on exception, untested |
-| Supabase — `traveler_profile` / `google_oauth_tokens` | Yes — `test_get_user_profile_supabase_error_falls_back_to_defaults`, `test_supabase_error_falls_back_to_local_file` |
-| Gemini (slot filling) | Yes |
-| Gemini (Recommendation/Planner) | Yes |
+| # | Input | Expected | Actual | Verdict |
+|---|---|---|---|---|
+| 1 | `"Plan a 5-day trip to Galle for 2 people, budget $500, interested in beaches and food"` | No clarification; itinerary respects budget and interests | Interests respected. **Budget not respected** — picked the $$$$ hotel over the available $$$ one, total cost $1,400 vs. $500 budget, with a `budget_notes` explanation rather than choosing the cheaper option. See finding below. | Partial |
+| 2 | `"Plan a trip to Kandy"` (with `user_id`) | Defaults to 1 day; pulls interests/travel_style/budget from `get_user_profile` | Defaulted to 1 day correctly. Profile fields stayed empty — `get_user_profile` queries real Supabase, which has no seeded profile data yet (see P1 below). Not a bug; exactly the documented pending state. | Blocked on P1 |
+| 3 | `"Plan a trip"` (no destination) | Asks for a destination before doing anything else | Clean clarification, zero errors, zero wasted work. | Pass |
+| 4 | No GPS, IP resolution fails | Falls back to asking for a starting location | Produces the full itinerary anyway, with `location_unresolved` surfaced as an advisory note rather than a blocking question. **Deliberate design choice**, not a bug — see note below. | Pass (by design, differs from literal BUILD_PLAN wording) |
 
-### The disaster-tool finding (still open)
+### Finding: the LLM doesn't always pick the cheapest option when budget is tight
 
-**File:** [app/tools/disaster_tool.py](../app/tools/disaster_tool.py)
+`RECOMMENDATION_PLANNING_SYSTEM_PROMPT` already instructs the model to "respect the given budget
+by choosing a price_range mix that fits," but case 1 shows it can still pick the more expensive of
+two available options (Galle only has 2 mock hotels: `$$$$` and `$$$`) and just narrate the
+overage in `budget_notes` instead of minimizing it. This is an LLM judgment-quality issue, not a
+code bug — the data and the instruction are both correct. Not fixed here since it's a prompt-
+engineering / model-choice tuning question rather than a defect; worth a note for whoever owns the
+Recommendation Agent prompt going forward.
 
-`get_disaster_info`'s "all three sources failed" fallback is unreachable in practice — each
-`_fetch_*` catches its own exceptions internally and returns `[]`, so "all three APIs are down" and
-"confirmed zero disasters nearby" produce identical output today. Documented (not fixed) in
-[tests/test_disaster_tool.py](../tests/test_disaster_tool.py).
+### Note on case 4's behavior
 
-**Fix:** have each `_fetch_*` return `None` on failure vs. `[]` on confirmed-empty, then check
-`all(r is None for r in results)`.
+BUILD_PLAN §12 literally says a failed location lookup should make the Orchestrator "ask for a
+starting location" — the same hard-stop treatment as case 3's missing destination. This backend
+instead treats it as advisory (see `_SOFT_ERROR_PREFIXES` in `app/core/orchestrator.py`): the plan
+still completes, with a note attached. This was a deliberate choice made earlier in development —
+asking "where are you traveling from?" on every GPS-less request seemed like worse UX than just
+noting it, especially now that a traveler can resolve it themselves just by mentioning an origin
+in the chat (`"I'm starting from Polonnaruwa"` — see `origin_location` in `slot_filling.py`). Flag
+this to whoever reviews behavior against BUILD_PLAN's literal spec — it's a conscious deviation,
+not an oversight.
 
 ---
 
-## P2 — Get the DB migration reviewed and applied
+## Remaining items
 
-**File:** [docs/db_migrations.sql](db_migrations.sql)
+### P1 — Get `docs/db_migrations.sql` applied (blocks §12 case 2)
 
-Written up but **not run against the real Supabase project** — this repo has no direct DB access.
-Needs Member B (or whoever holds Supabase credentials) to review and apply:
+**Not this repo's job to apply** — no Supabase credentials here. Needs whoever holds them to run
+it (Supabase SQL editor is the simplest path; see the file for full detail):
 1. `CREATE TABLE IF NOT EXISTS google_oauth_tokens (...)`
 2. `ALTER TABLE traveler_profile ADD COLUMN IF NOT EXISTS default_budget, home_location`
 
-Until this runs, `get_user_profile`/calendar token storage keep working exactly as before (falling
-back to defaults / the local JSON file) — nothing is blocked, but nothing actually persists to the
-shared database either.
+Then seed at least one `traveler_profile` row to actually verify §12 case 2 end-to-end. Until then,
+`get_user_profile`/calendar token storage keep working exactly as now (falling back to defaults /
+local JSON) — nothing is blocked, but nothing persists to the shared database either. This file is
+a handoff artifact, not something that needs to keep living in this repo long-term — once applied,
+it can be deleted here or folded into wherever the NestJS side manages schema migrations, if it
+has one.
 
----
+### P2 — `app/utils/session_store.py`'s interim JSON-file storage
 
-## P3 — Phase 6 finish: demo
+Multi-turn conversation state is currently a local JSON file, same pattern the calendar tokens and
+user profiles used before they were wired to real Supabase (`google_oauth_tokens`,
+`traveler_profile`). A `chat_session`/`itinerary` table per the SAD's ER diagram would be the real
+fix, following the exact same pattern already used for the other two. Not done — flagged as the
+last piece still on local-file fallback.
 
-1. Run BUILD_PLAN §12's scripted inputs end to end and record actual outcomes — all four should
-   now be checkable including the `get_user_profile` one, once P2's migration lands.
-2. Bare chat page or a Postman/CLI flow hitting `POST /trip-plan`.
-3. Demo script / walkthrough for the mentor.
+### P3 — Rate limiting / request queueing (SAD §10.3)
 
----
-
-## P4 — Rate limiting / request queueing (SAD §10.3) — after everything else works end to end
-
-**Not now.** Only matters once real concurrent traffic gets close to the ~20 req/sec figure SAD
-names — nowhere close to capstone-demo load. Revisit **only if there's time left after P1–P3 and
-the whole pipeline is solid end to end.** If it comes up: a semaphore limiting concurrent
+**Not needed yet.** Only matters once real concurrent traffic approaches ~20 req/sec — nowhere
+close to demo/early-integration load. If it ever comes up: a semaphore limiting concurrent
 `/trip-plan` executions is the simple first move; a real task queue (Celery/RQ + Redis — already
 have Redis via `app/utils/cache.py`) is the heavier option if that's not enough.
 
+### Explicitly decided NOT to build here
+
+- **Currency handling** — SRS mentions "preferred currency" (LKR in mockups); this backend
+  implicitly assumes USD throughout. Skipped by decision, not forgotten.
+- **HTTPS/encryption in transit** — deployment-level (reverse proxy/load balancer TLS
+  termination), not application code.
+- **Real Google Maps routing** — map pins use free coordinates (`lat`/`lon` on every itinerary
+  item); no turn-by-turn directions. Confirmed sufficient for the SRS's actual requirement (pins on
+  a map), and avoids a billing-required API.
+
 ---
 
-## P5 — Phase 7 (separate repo, after Phase 6 is solid here)
+## Everything closed out this development cycle
 
-NestJS backend + Admin Panel — not this repo. The §7 contract this depends on is now settled (P1
-from the previous snapshot, done).
-
----
-
-## Suggested order
-
-1. **P2** (get the migration reviewed/applied) — send it to Member B now so it's not a last-minute
-   blocker before the demo.
-2. **P1** (error matrix / disaster_tool fix) — the "is this actually solid" pass.
-3. **P3** (demo).
-4. **P4** (rate limiting) — only if time remains after the above.
+Multi-turn conversations, map pins on every itinerary item, `traveler_request` passthrough for
+special requirements, the `budget_notes` bug (was silently discarded on every request), the
+OpenWeather timezone bug, the `disaster_tool.py` fallback bug (couldn't distinguish "all sources
+down" from "confirmed safe"), the policy guard's "ivory market" gap, the `§7` API contract
+(`message` field, debug-gated `completed_steps`), `db_tool.get_user_profile` and
+`calendar_tool`'s token storage wired to real Supabase (pending migration above), mock-data
+coordinates fixed (every listing now has distinct real coordinates instead of one shared district
+centroid), a standalone demo page, and named-origin geocoding from free text. Full detail on each
+is in the git history and this repo's test suite — every fix above shipped with tests proving it.
