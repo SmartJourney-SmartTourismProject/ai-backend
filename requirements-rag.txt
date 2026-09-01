@@ -1,0 +1,14 @@
+# Optional: only needed if ENABLE_RAG=true in .env.
+#
+# RAG is demoted, not deleted (decision D11, docs/master_plan/PROJECT_MASTER_PLAN.md):
+# it's off the candidate-selection path, since the deterministic scorer
+# (app/core/scoring.py) ranks better and reproducibly. Kept for a future
+# knowledge-document Q&A feature ("do I need to cover my shoulders at the
+# Temple of the Tooth?") that no table can answer.
+#
+#   pip install -r requirements-rag.txt
+#
+# Both packages are free and require no API key or card.
+
+faiss-cpu
+sentence-transformers

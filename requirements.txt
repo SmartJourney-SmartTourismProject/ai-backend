@@ -34,6 +34,7 @@ jsonpointer==3.1.1
 langchain==1.3.14
 langchain-core==1.5.3
 langchain-google-genai==4.3.2
+langchain-groq==1.1.3    # LLM failover provider (decision D6b) - free tier, no card
 langchain-protocol==0.0.18
 langgraph==1.2.10
 langgraph-checkpoint==4.1.1
@@ -92,6 +93,8 @@ google-auth-oauthlib==1.4.0
 #             the event loop via APScheduler (already pinned further up).
 apscheduler==3.11.3
 asyncpg
-faiss-cpu
-sentence-transformers
 redis
+
+# faiss-cpu and sentence-transformers moved to requirements-rag.txt -
+# RAG is demoted and off by default (decision D11, PROJECT_MASTER_PLAN.md).
+# pip install -r requirements-rag.txt only if you set ENABLE_RAG=true.

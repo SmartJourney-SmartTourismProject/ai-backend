@@ -291,19 +291,6 @@ async def get_events(destination: str, start_date: str, end_date: str) -> List[d
     return events
 
 
-# --- Transit info ------------------------------------------------------------
-
-async def get_transit_info(listing_id: str) -> dict:
-    default = {"has_public_transit": False, "nearest_transit_stop": None}
-    return default
-
-
-# --- PickMe / rideshare coverage ---------------------------------------------
-
-async def check_pickme_coverage(lat: float, lon: float) -> bool:
-    return True
-
-
 # --- User profile --------------------------------------------------------
 
 def _row_to_profile_dict(row) -> dict:
