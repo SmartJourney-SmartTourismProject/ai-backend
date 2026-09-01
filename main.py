@@ -42,6 +42,7 @@ from app.api.trip import router as trip_router
 from app.api.google_oauth import router as google_oauth_router
 from app.rag.rag_service import rag_service
 from app.scheduler import start_scheduler, stop_scheduler
+from app.utils.db_pool import close_pool
 from app.data import events_ingest, overpass_ingest
 
 logging.basicConfig(level=logging.INFO)
@@ -136,8 +137,9 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Stop the background scheduler cleanly."""
+    """Stop the background scheduler and release the DB pool cleanly."""
     stop_scheduler()
+    await close_pool()
 
 
 if __name__ == "__main__":

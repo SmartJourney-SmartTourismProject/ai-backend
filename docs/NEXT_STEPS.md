@@ -1,11 +1,11 @@
 # AI Backend — Final Status & Handoff
 
 **Branch:** `main`
-**Snapshot:** 2026-08-30
+**Snapshot:** 2026-08-31
 **Reference:** [BUILD_PLAN.md](BUILD_PLAN.md) — §7 API contract, §8 error/caching matrix, §12 verification checklist. Cross-checked against the project's SRS and SAD documents.
 
 This document closes out active development on the Python/FastAPI AI backend and records its
-final state for whoever picks up the NestJS backend next. Test suite: **110 passing, 0 xfail**,
+final state for whoever picks up the NestJS backend next. Test suite: **127 passing, 0 xfail**,
 no network calls, no API keys required, ~5s.
 
 ---
@@ -76,7 +76,7 @@ weather/disaster APIs, no mocking):
 | # | Input | Expected | Actual | Verdict |
 |---|---|---|---|---|
 | 1 | `"Plan a 5-day trip to Galle for 2 people, budget $500, interested in beaches and food"` | No clarification; itinerary respects budget and interests | Interests respected. **Budget not respected** — picked the $$$$ hotel over the available $$$ one, total cost $1,400 vs. $500 budget, with a `budget_notes` explanation rather than choosing the cheaper option. See finding below. | Partial |
-| 2 | `"Plan a trip to Kandy"` (with `user_id`) | Defaults to 1 day; pulls interests/travel_style/budget from `get_user_profile` | Defaulted to 1 day correctly. Profile fields stayed empty — `get_user_profile` queries real Supabase, which has no seeded profile data yet (see P1 below). Not a bug; exactly the documented pending state. | Blocked on P1 |
+| 2 | `"Plan a trip to Kandy"` (with `user_id`) | Defaults to 1 day; pulls interests/travel_style/budget from `get_user_profile` | Defaulted to 1 day correctly. Profile fields stayed empty — `get_user_profile` queries the real database, which has no seeded profile data yet (see P1 below). Not a bug; exactly the documented pending state. | Blocked on P1 |
 | 3 | `"Plan a trip"` (no destination) | Asks for a destination before doing anything else | Clean clarification, zero errors, zero wasted work. | Pass |
 | 4 | No GPS, IP resolution fails | Falls back to asking for a starting location | Produces the full itinerary anyway, with `location_unresolved` surfaced as an advisory note rather than a blocking question. **Deliberate design choice**, not a bug — see note below. | Pass (by design, differs from literal BUILD_PLAN wording) |
 
@@ -106,27 +106,29 @@ not an oversight.
 
 ## Remaining items
 
-### P1 — Get `docs/db_migrations.sql` applied (blocks §12 case 2)
+### ✅ Resolved — Supabase → PostgreSQL migration (2026-08-30)
 
-**Not this repo's job to apply** — no Supabase credentials here. Needs whoever holds them to run
-it (Supabase SQL editor is the simplest path; see the file for full detail):
-1. `CREATE TABLE IF NOT EXISTS google_oauth_tokens (...)`
-2. `ALTER TABLE traveler_profile ADD COLUMN IF NOT EXISTS default_budget, home_location`
+The project moved off Supabase to a Dockerised PostgreSQL + PostGIS shared with the NestJS
+backend. `db_tool.py` and `calendar_tool.py` now use `asyncpg`, the batch ingest writer uses
+`psycopg2`, and `docs/db_migrations.sql` is gone — its contents are folded into the Prisma
+migration the NestJS backend owns (`backend/docs/BACKEND_PLAN.md` §4.1). All queries were verified
+against a live PostGIS container; see [`POSTGRES_MIGRATION_PLAN.md`](POSTGRES_MIGRATION_PLAN.md) §7
+for results and the two bugs it caught.
 
-Then seed at least one `traveler_profile` row to actually verify §12 case 2 end-to-end. Until then,
-`get_user_profile`/calendar token storage keep working exactly as now (falling back to defaults /
-local JSON) — nothing is blocked, but nothing persists to the shared database either. This file is
-a handoff artifact, not something that needs to keep living in this repo long-term — once applied,
-it can be deleted here or folded into wherever the NestJS side manages schema migrations, if it
-has one.
+### P1 — Seed a `traveler_profile` row (blocks §12 case 2)
+
+The code path is now proven end-to-end against a real database — only the data is missing. Once
+the NestJS Prisma migration + seed lands (`backend/docs/BACKEND_PLAN.md` Phase 1), seed at least
+one `traveler_profile` row with `travel_interests` / `travel_style` / `default_budget`, and §12's
+`"Plan a trip to Kandy"` case should finally pass end-to-end.
 
 ### P2 — `app/utils/session_store.py`'s interim JSON-file storage
 
-Multi-turn conversation state is currently a local JSON file, same pattern the calendar tokens and
-user profiles used before they were wired to real Supabase (`google_oauth_tokens`,
-`traveler_profile`). A `chat_session`/`itinerary` table per the SAD's ER diagram would be the real
-fix, following the exact same pattern already used for the other two. Not done — flagged as the
-last piece still on local-file fallback.
+Multi-turn conversation state is still a local JSON file — the same pattern the calendar tokens
+and user profiles used before this migration wired them to real tables. A `chat_session` /
+`chat_message` table per the SAD's ER diagram is the real fix, and NestJS is arguably the better
+owner of it (it already needs chat history for the sidebar — see `backend/docs/BACKEND_PLAN.md`
+§5.3). This is now the **last piece still on a local-file fallback**.
 
 ### P3 — Rate limiting / request queueing (SAD §10.3)
 
@@ -154,7 +156,7 @@ special requirements, the `budget_notes` bug (was silently discarded on every re
 OpenWeather timezone bug, the `disaster_tool.py` fallback bug (couldn't distinguish "all sources
 down" from "confirmed safe"), the policy guard's "ivory market" gap, the `§7` API contract
 (`message` field, debug-gated `completed_steps`), `db_tool.get_user_profile` and
-`calendar_tool`'s token storage wired to real Supabase (pending migration above), mock-data
+`calendar_tool`'s token storage wired to the real database, mock-data
 coordinates fixed (every listing now has distinct real coordinates instead of one shared district
 centroid), a standalone demo page, and named-origin geocoding from free text. Full detail on each
 is in the git history and this repo's test suite — every fix above shipped with tests proving it.

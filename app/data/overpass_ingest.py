@@ -3,7 +3,7 @@ Monthly hotel/restaurant/attraction refresh.
 
 Pulls base listings from OpenStreetMap Overpass (free, no key) for every
 Sri Lanka district, enriches hotels with real nightly prices from the
-Booking.com API (via RapidAPI), and upserts everything into Supabase's
+Booking.com API (via RapidAPI), and upserts everything into the database's
 `travel_listing` table. Run via app/scheduler.py (monthly) or manually:
 
     python -m app.data.overpass_ingest
@@ -19,7 +19,7 @@ import requests
 
 from app.config.settings import settings
 from app.data.sri_lanka_districts import DISTRICTS
-from app.data.supabase_writer import (
+from app.data.postgres_writer import (
     get_category_id_map,
     get_district_id_map,
     has_column,
@@ -367,11 +367,15 @@ def run_ingestion() -> None:
     print(f"\n[SUCCESS] Ingestion complete. Total named listings structured for database: {len(all_listings)}")
 
     db_rows = build_db_rows(all_listings)
-    synced = upsert_rows("travel_listing", db_rows, on_conflict="external_ref")
+    # geo_columns: see the matching note in events_ingest.py - "location" is
+    # WKT and must bind through ST_GeogFromText().
+    synced = upsert_rows(
+        "travel_listing", db_rows, on_conflict="external_ref", geo_columns={"location"}
+    )
     if synced:
-        print(f"[SUCCESS] Upserted {synced} rows into Supabase 'travel_listing'.")
+        print(f"[SUCCESS] Upserted {synced} rows into 'travel_listing'.")
     else:
-        print("[WARN] Supabase not configured (or upsert failed) - rows were not persisted.")
+        print("[WARN] Database not configured (or upsert failed) - rows were not persisted.")
 
     if all_listings:
         print("\nSample Output Data:")

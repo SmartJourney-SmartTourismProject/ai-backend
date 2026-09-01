@@ -81,13 +81,17 @@ pydantic-settings
 beautifulsoup4==4.13.4
 google-auth-oauthlib==1.4.0
 
-# --- Member B's data/RAG/scheduler track (missing from the list above) ---
-# All four are imported behind try/except fallbacks in their respective
-# modules, so the app still runs without them (mock data / no-op cache /
-# unfiltered candidate lists) - but real Supabase, vector search, and the
-# automated data-refresh schedule need these installed.
+# --- Data / RAG / scheduler track ---
+# All are imported behind try/except fallbacks in their respective modules, so
+# the app still runs without them (mock data / no-op cache / unfiltered
+# candidate lists) - but the real database, vector search, and the automated
+# data-refresh schedule need these installed.
+#
+# asyncpg  -> async DB access in the request path (db_tool, calendar_tool)
+# psycopg2 -> sync DB access for the batch ingest scripts, which run outside
+#             the event loop via APScheduler (already pinned further up).
 apscheduler==3.11.3
-supabase
+asyncpg
 faiss-cpu
 sentence-transformers
 redis

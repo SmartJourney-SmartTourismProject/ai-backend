@@ -2,7 +2,7 @@
 Weekly local-events refresh.
 
 Pulls upcoming events (next ~30 days) per Sri Lanka district from Ticketmaster
-Discovery, and upserts them into Supabase's `local_event` table. Run via
+Discovery, and upserts them into the `local_event` table. Run via
 app/scheduler.py (weekly) or manually:
 
     python -m app.data.events_ingest
@@ -27,7 +27,7 @@ import requests
 
 from app.config.settings import settings
 from app.data.sri_lanka_districts import DISTRICTS
-from app.data.supabase_writer import get_district_id_map, to_point_wkt, upsert_rows
+from app.data.postgres_writer import get_district_id_map, to_point_wkt, upsert_rows
 
 logger = logging.getLogger(__name__)
 
@@ -139,11 +139,16 @@ def run_ingestion() -> None:
     print(f"\n[SUCCESS] Ingestion complete. Total events found: {len(all_events)}")
 
     db_rows = build_db_rows(all_events)
-    synced = upsert_rows("local_event", db_rows, on_conflict="external_ref")
+    # geo_columns: "location" holds PostGIS WKT from to_point_wkt() and must
+    # bind through ST_GeogFromText() - Postgres won't cast a string into a
+    # geography column on its own.
+    synced = upsert_rows(
+        "local_event", db_rows, on_conflict="external_ref", geo_columns={"location"}
+    )
     if synced:
-        print(f"[SUCCESS] Upserted {synced} rows into Supabase 'local_event'.")
+        print(f"[SUCCESS] Upserted {synced} rows into 'local_event'.")
     else:
-        print("[WARN] Supabase not configured (or upsert failed) - rows were not persisted.")
+        print("[WARN] Database not configured (or upsert failed) - rows were not persisted.")
 
 
 if __name__ == "__main__":

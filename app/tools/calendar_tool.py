@@ -10,15 +10,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
 from app.config.settings import settings
-
-# Try to import supabase, but make it optional - same pattern as db_tool.py.
-try:
-    from supabase import acreate_client, AsyncClient
-    _SUPABASE_AVAILABLE = True
-except ImportError:
-    _SUPABASE_AVAILABLE = False
-    acreate_client = None
-    AsyncClient = None
+from app.utils.db_pool import get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -26,25 +18,30 @@ SCOPES = ["https://www.googleapis.com/auth/calendar.freebusy"]
 
 
 # --- Credential storage -------------------------------------------------
-# Real persistence: Supabase's `google_oauth_tokens` table (user_id,
-# access_token, refresh_token, token_expiry, scope - see member_B.md).
-# Falls back to a local JSON file when Supabase isn't configured (e.g. a
-# fresh clone with no .env yet), so this still works without a database -
-# it just won't survive across multiple server instances or, if Supabase
+# Real persistence: the `google_oauth_tokens` table (user_id, access_token,
+# refresh_token, token_expiry, scope). This table is the AI backend's alone
+# to write - see backend/docs/BACKEND_PLAN.md §2.
+# Falls back to a local JSON file when DATABASE_URL isn't configured (e.g. a
+# fresh clone with no .env yet), so this still works without a database - it
+# just won't survive across multiple server instances or, if the database
 # itself is down, past this process's restart.
 _CREDENTIAL_STORE_PATH = Path(__file__).resolve().parent.parent.parent / "calendar_tokens.json"
 
-_client: Optional["AsyncClient"] = None
 
-
-async def _get_client() -> Optional["AsyncClient"]:
-    """Lazily create and cache a single AsyncClient for the process."""
-    global _client
-    if not _SUPABASE_AVAILABLE or not settings.supabase_url or not settings.supabase_key:
+def _coerce_expiry(value) -> Optional[datetime]:
+    """
+    google_oauth.py stores token_expiry as an ISO string, but the column is
+    timestamptz and asyncpg won't coerce a string for us (the Supabase REST
+    layer used to). Accept either and hand asyncpg a real datetime.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        logger.warning(f"Unparseable token_expiry {value!r}; storing NULL.")
         return None
-    if _client is None:
-        _client = await acreate_client(settings.supabase_url, settings.supabase_key)
-    return _client
+
 
 
 def _load_local_store() -> dict:
@@ -60,45 +57,64 @@ def _save_local_store(store: dict) -> None:
     _CREDENTIAL_STORE_PATH.write_text(json.dumps(store, indent=2))
 
 
+_SELECT_TOKENS = """
+    SELECT access_token, refresh_token, token_expiry, scope
+    FROM google_oauth_tokens
+    WHERE user_id = $1
+"""
+
+_UPSERT_TOKENS = """
+    INSERT INTO google_oauth_tokens
+        (user_id, access_token, refresh_token, token_expiry, scope)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (user_id) DO UPDATE SET
+        access_token  = EXCLUDED.access_token,
+        refresh_token = EXCLUDED.refresh_token,
+        token_expiry  = EXCLUDED.token_expiry,
+        scope         = EXCLUDED.scope,
+        updated_at    = now()
+"""
+
+
 async def get_stored_credentials(user_id: str) -> dict | None:
     try:
-        client = await _get_client()
-        if client:
-            response = await (
-                client.table("google_oauth_tokens")
-                .select("*")
-                .eq("user_id", user_id)
-                .limit(1)
-                .execute()
-            )
-            if response.data:
-                row = response.data[0]
+        pool = await get_pool()
+        if pool:
+            row = await pool.fetchrow(_SELECT_TOKENS, user_id)
+            if row:
                 return {
-                    "access_token": row.get("access_token"),
-                    "refresh_token": row.get("refresh_token"),
-                    "token_expiry": row.get("token_expiry"),
-                    "scope": row.get("scope"),
+                    "access_token": row["access_token"],
+                    "refresh_token": row["refresh_token"],
+                    "token_expiry": row["token_expiry"],
+                    "scope": row["scope"],
                 }
+            # Database reachable and authoritative: no row means this user
+            # genuinely hasn't connected a calendar (or revoked it). Do NOT
+            # fall through to the local file here - that could resurrect a
+            # token the user deliberately disconnected. The local store is a
+            # fallback for "no database", not for "database says no".
+            return None
     except Exception as e:
-        logger.warning(f"Supabase token lookup failed for user '{user_id}', trying local store: {e}")
+        logger.warning(f"Token lookup failed for user '{user_id}', trying local store: {e}")
 
     return _load_local_store().get(user_id)
 
 
 async def save_credentials(user_id: str, creds: dict) -> None:
     try:
-        client = await _get_client()
-        if client:
-            await client.table("google_oauth_tokens").upsert({
-                "user_id": user_id,
-                "access_token": creds.get("access_token"),
-                "refresh_token": creds.get("refresh_token"),
-                "token_expiry": creds.get("token_expiry"),
-                "scope": creds.get("scope"),
-            }).execute()
+        pool = await get_pool()
+        if pool:
+            await pool.execute(
+                _UPSERT_TOKENS,
+                user_id,
+                creds.get("access_token"),
+                creds.get("refresh_token"),
+                _coerce_expiry(creds.get("token_expiry")),
+                creds.get("scope"),
+            )
             return
     except Exception as e:
-        logger.warning(f"Supabase token save failed for user '{user_id}', falling back to local store: {e}")
+        logger.warning(f"Token save failed for user '{user_id}', falling back to local store: {e}")
 
     store = _load_local_store()
     store[user_id] = creds

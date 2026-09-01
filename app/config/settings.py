@@ -20,9 +20,11 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 2048
 
     # ===== Database Configuration =====
-    supabase_url: str = ""
-    supabase_key: str = ""
-    database_url: str = ""  # PostgreSQL connection string; matters once Supabase is wired in
+    # The single DB setting - points at the same PostgreSQL (PostGIS) instance
+    # the NestJS backend owns. See backend/docs/BACKEND_PLAN.md §2 for which
+    # service owns which table. Left blank, every DB-backed lookup falls back
+    # to mock data / local files, so this service still runs standalone.
+    database_url: str = ""
 
     # ===== External API Keys =====
     openweather_api_key: str = ""

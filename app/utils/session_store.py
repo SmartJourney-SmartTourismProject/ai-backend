@@ -3,7 +3,8 @@
 Interim persistence for multi-turn trip-planning conversations.
 
 TODO(Member B): move this to the real chat_session/itinerary tables (see
-SAD §9 Data View - Chat_Session, Chat_Message) once Supabase is wired in.
+SAD §9 Data View - Chat_Session, Chat_Message); NestJS is arguably the
+better owner, since it already needs chat history for the sidebar.
 Until then, a local JSON file keyed by session_id - same interim pattern
 as app/tools/calendar_tool.py's token store, and with the same caveats:
 not safe across multiple server instances, no encryption at rest.

@@ -15,7 +15,7 @@ UI are separate repositories.
 - FastAPI
 - LangGraph
 - Gemini (via `langchain-google-genai`)
-- Supabase / PostgreSQL (falls back to mock data if not configured)
+- PostgreSQL + PostGIS (shared with the NestJS backend; falls back to mock data if not configured)
 - Python
 
 ---
@@ -46,7 +46,7 @@ UI are separate repositories.
    |---|---|
    | `GEMINI_API_KEY` | Slot-filling and itinerary generation (core feature — required) |
    | `OPENWEATHER_API_KEY` | Weather forecasts (optional — degrades to no weather data without it) |
-   | `SUPABASE_URL` / `SUPABASE_KEY` | Real listings/user data (optional — falls back to built-in mock data for Kandy/Ella/Colombo/Galle without it) |
+   | `DATABASE_URL` | Real listings/user/profile data and calendar-token storage (optional — falls back to built-in mock data for Kandy/Ella/Colombo/Galle and a local JSON token file without it). Points at the same database the NestJS backend owns; start it with `docker compose up -d` in `backend/`. |
    | `GOOGLE_CALENDAR_CLIENT_ID` / `_SECRET` | Google Calendar OAuth (optional — calendar features fall back to "no calendar connected") |
    | `REDIS_URL` | Weather/disaster caching (optional — cache fails open, always a live fetch without it) |
 
@@ -88,8 +88,8 @@ python -m uvicorn main:app --port 8001
 pytest
 ```
 
-100+ tests, no network calls, no API keys needed, runs in a few seconds. All external services
-(Gemini, OpenWeather, EONET/USGS/GDACS, Supabase, Google Calendar, Nominatim) are mocked.
+120+ tests, no network calls, no API keys needed, runs in a few seconds. All external services
+(Gemini, OpenWeather, EONET/USGS/GDACS, PostgreSQL, Google Calendar, Nominatim) are mocked.
 
 ---
 
@@ -155,5 +155,6 @@ automated testing) rely on the mocked test suite instead of live calls.
 
 - [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) — the original architecture/contract plan
 - [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md) — current status and what's left to do
-- [`docs/db_migrations.sql`](docs/db_migrations.sql) — Supabase schema additions this backend needs
+- [`docs/POSTGRES_MIGRATION_PLAN.md`](docs/POSTGRES_MIGRATION_PLAN.md) — the Supabase → PostgreSQL migration (done)
+- [`../backend/docs/BACKEND_PLAN.md`](../backend/docs/BACKEND_PLAN.md) — the NestJS backend plan, including the shared database schema
 - [`docs/member_B.md`](docs/member_B.md) — cross-track handoff notes
