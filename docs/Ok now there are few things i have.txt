@@ -1,0 +1,174 @@
+Ok now there are few things i have spotted in the project we have to work on with
+
+1st the work flow
+
+user_input -> validator and policy check ->Slot filling-> Orchestral agent ->use all tools as below -> recommendation agent -> planner agent -> orchestral agent -> validate the result -> user 
+
+Orchestral agent uses relavent tools
+	1.weather tool
+	2.disaster tool
+	3.calendar tool
+	4.location tool
+	5.geo_code tool
+
+	Mainly we use these tools to 1st check the users travel destinations and starting points as lat and lon and check if user gave
+	calendar access if so check for free days and by using those data check for the weather and disaster ith those days and those places
+
+then we have recommendation and planner agent which uses above data as well
+
+recommendation agent check the locations we can recommend for the user according to the users preference
+it should check the local events ,hotels and resturants, travel destinations etc
+
+planner agent should work on the budget and itinerary generation currently i think those things doesn't g like tools but i think its better to use those features for planner and recommendation agent as tools as well
+
+so in here agents should Re-Act and generate the most suitable and efficient solution for the trip as an itinerary
+also all the data should be coming from the internal database 
+
+so about the database we need to connect API's for different trusted and free websites to get data about local events ,hotels and resturants, travel destinations etc and also about costs as well so it we need another tool for each to do this and update the database 
+in like daily we can have a schedular for that as well as we currently have 
+( so for this we will use docker as we discussed before for our internal database so try to develop a method to put data into that using the schedular and webdite api tools as well u have to make the schema as well for that)
+
+also i think we dont have ReAct method we need to work on that as well and currently session_store handles the session memory we need to work on that as well
+
+Also there are few concerns i have found
+	1.in app/data/sri_lanka_districts uses hardcoded method to identify districts this wont do we have to do like find it using google 	map or something cant keep hardcoded things
+	2.Agents doesnnt REACT
+	3.Agentic System still uses mock data we dont need mock data now remove all the mock data and mock data related stuff and also 	db_tool mock data we should only rely on internal database
+	4. change the ll model to gemini 3.5 lite with more daily tokens
+	5.also app/prompts uses to centralize all prompts for agents and llm so put all prompts put here 
+	6. also regarding prompts we need to make prompts deterministic so we need to go with like a structured output for the prompts 	maybe a json structure ill give this in details below in ( deterministic agents 1.1 ) so go accordingly and try to make the ai 	outputs more deterministc
+	7.also for each LLM output and agentic output try to make a simple and quick validator to check if the output given is valid like 	is it in the proper and defined structure dont make it with minimum latency
+	8.also if its better to use free external MCPs rather than using in build tools try to use them as well
+	9. Also remove and unwanted feathure rather than using many features most important is making an end to end working solution with 	no errors try to achieve that at least 90%
+	10. also like in budget tracking even if we have budget we need to go for places which is more medium cost or low cost not only 	considering money reviews of those places and distance from that place to events and destinations and those stuffs so need to give 	rules for the agents to do this like giving scores to different different attributes like distance,cost etc if we consider hotels 	and resturents like that when choosing anything even a destination recommendation agent and planner agent should consider these 	things
+		ex: score = (
+   		    	preference_score * 0.5 +
+    			distance_score * 0.3 +
+    			rating_score * 0.2
+			)
+	
+		recommendations.sort(
+    			key=lambda x: x.score,
+    			reverse=True
+			)
+	11.consider the handling of concurrent users and those complex stuff later 1st we need to make this working as we are still in the 	developing stage and behind the schedule
+	12. Also work on making the database schema for the things needed by the AI-backend as well and try to make the database in the 	docker as well
+	
+deterministic agents 1.1
+1. Temperature = control randomness
+
+If your LLM supports it:
+
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0
+)
+
+temperature=0 tells the model to choose the most probable output rather than intentionally sampling more varied outputs.
+
+But temperature 0 does not guarantee 100% identical responses. There can still be small variations depending on the model/API implementation.
+
+2. Prompt = constrain the agent
+
+You can make the prompt much more deterministic by explicitly defining what it must and must not do.
+
+For example, instead of:
+
+Recommend some places for the user.
+
+Use:
+
+You are a tourism recommendation agent.
+
+Rules:
+1. Only recommend places returned by the provided database/tool results.
+2. Do not invent places.
+3. Rank places based on:
+   - user preferences: 50%
+   - distance: 30%
+   - rating: 20%
+4. Return exactly 5 recommendations.
+5. Return the result in the specified JSON format.
+6. If fewer than 5 valid places exist, return only the available places.
+7. Do not add explanations outside the JSON response.
+
+This makes the behavior more predictable.
+
+3. Structured output is even more important
+
+For your project, this is particularly useful.
+
+Instead of allowing:
+
+I think you should visit Ella because...
+
+define a schema:
+
+class Recommendation(BaseModel):
+    place_name: str
+    reason: str
+    score: float
+
+Then:
+
+structured_llm = llm.with_structured_output(Recommendation)
+
+Now the model has a fixed structure to follow.
+
+4. If you need REAL determinism, don't let the LLM make the decision
+
+This is the most important point.
+
+Suppose your recommendation agent gets:
+
+Place A: rating 4.5, distance 5km
+Place B: rating 4.7, distance 20km
+Place C: rating 4.2, distance 2km
+
+If you ask the LLM:
+
+"Which is the best place?"
+
+the LLM is still making a subjective decision.
+
+Instead, have the LLM extract/classify information, then use normal code for the actual ranking:
+
+score = (
+    preference_score * 0.5 +
+    distance_score * 0.3 +
+    rating_score * 0.2
+)
+
+recommendations.sort(
+    key=lambda x: x.score,
+    reverse=True
+)
+
+That part is completely deterministic.
+
+So your architecture can be:
+
+User
+  ↓
+LLM
+  ↓
+Extract preferences
+  ↓
+Deterministic Python logic
+  ↓
+Rank recommendations
+  ↓
+LLM
+  ↓
+Generate natural-language explanation
+For your SmartJourney project
+
+I'd recommend this approach:
+
+Technique	Determinism
+temperature=0	🟢 High
+Strict prompt	🟢 Higher
+Structured output	🟢 Higher
+Fixed tool results	🟢 Higher
+Deterministic Python ranking	🟢 Very high
+LLM making the final decision itself	🟠 Less deterministic
