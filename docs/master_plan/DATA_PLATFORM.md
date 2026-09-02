@@ -213,8 +213,14 @@ CREATE TABLE geo_resolution (
     display_name  text NOT NULL,
     location      geography(Point,4326) NOT NULL,
     district_id   uuid REFERENCES district(id),
-    confidence    text NOT NULL,                     -- high|medium|low
+    confidence    text NOT NULL,                     -- high|medium|low|out_of_country
     provider      text NOT NULL,                     -- nominatim|google|district_table
+    -- ✅ added 0005 (decision D17, 2026-09-02): the real country name when
+    -- confidence='out_of_country' - lets a repeated foreign destination
+    -- ("New York" again) answer instantly from cache instead of
+    -- re-querying Nominatim, and lets slot_filling.py's clarification
+    -- message name the actual country.
+    country       text,
     resolved_at   timestamptz NOT NULL DEFAULT now()
 );
 
@@ -369,21 +375,50 @@ LIMIT 1;
 because someone typed a dictionary entry for Ella. The current code cannot do that at all: it has a
 `_MOCK_TOWN_COORDS = {"ella": {...}}` hack precisely because Ella isn't a district.
 
-### 4.3 Name → point: `app/tools/geo_tool.py`
+### 4.3 Name → point: `app/tools/geo_tool.py` — ✅ implemented, incl. out-of-country detection (D17)
 
 ```python
-async def resolve_place(name: str) -> PlaceResolution | ToolError:
+async def resolve_place(name: str) -> PlaceResolution | None:
     """1. geo_resolution cache (permanent — place names don't move)
        2. exact/trigram match against district.name
-       3. exact/trigram match against travel_listing.name in-country
-       4. Nominatim (q=f"{name}, Sri Lanka", limit=1, 1 req/s, UA header)
-       5. Google Geocoding — only if google_maps_api_key is set (optional, needs billing)
+       3. Nominatim, two-step (see _geocode_via_nominatim below)
        Then: resolve_district(lat, lon) → district_id; write through to geo_resolution."""
 ```
 
-Steps 2 and 3 mean common destinations never leave the database. Nominatim's usage policy (1 req/s,
-attribution) is respected because the cache makes repeats free — and the cache is permanent, since
-"Ella, Sri Lanka" will not move.
+Step 3 is **not** a single biased query — that was tried and found unsafe. `q=f"{name}, Sri Lanka"`
+still does fuzzy full-text matching, so a genuinely foreign name can return a coincidental in-country
+match: verified live 2026-09-02, `"Paris, Sri Lanka"` resolved to **"Paris Perera 4 Lane"**, a
+residential street in Ja-Ela — a real place, wrong country, confidently believed. The actual
+implementation:
+
+```python
+async def _geocode_via_nominatim(name: str) -> dict | None:
+    """1. Nominatim search with countrycodes=lk. Accept ONLY if the match's
+          `class` is settlement-level (place/boundary/natural) - verified
+          live: Ella/Kandy -> class=place, Sigiriya -> class=natural,
+          Nuwara Eliya -> class=boundary; the fluke "Paris"/"New York"/
+          "London" matches were class=highway/tourism/amenity. This is the
+          filter that actually distinguishes a real Sri Lankan place from
+          "Nominatim found something containing your query text somewhere
+          in the country."
+       2. If step 1 doesn't clear that bar, an UNRESTRICTED global search,
+          reporting the real country via address.country_code. This is
+          what lets the caller say "New York is in United States" instead
+          of silently returning nothing or the wrong place.
+    """
+```
+
+`PlaceResolution.confidence` can be `"out_of_country"`, with `country` naming the real place
+(`"United States"`, `"France"`). `slot_filling.py` checks for this immediately after extracting
+`destination` — on both a first turn and a follow-up — and sets `clarification_needed` to a plain
+message rather than letting the request continue toward district/recommendation/planning nodes that
+have no data for anywhere outside Sri Lanka. **Google Maps/Places was deliberately not used** —
+Nominatim plus the two-step class filter covers this for free.
+
+Steps 1–2 mean common Sri Lankan destinations never leave the database. Nominatim's usage policy
+(1 req/s, attribution) is respected because the cache makes repeats free — and the cache is
+permanent for both outcomes: a real Sri Lankan place ("Ella, Sri Lanka" will not move) and a
+detected foreign one (repeating "New York" answers from cache, not a fresh Nominatim round trip).
 
 ---
 
@@ -625,40 +660,40 @@ SELECT source, status, sum(rows_upserted) FROM data_source_run
 
 ---
 
-## 9. Mock-data removal checklist
+## 9. Mock-data removal checklist — ✅ complete 2026-09-02
 
-Concern **#3**. Do this **only after §8 passes** — removing mocks before the database has data
-leaves the system with nothing to plan from. Every site, so nothing is missed:
+Concern **#3**. Every site, tracked from the original plan:
 
-| # | File | What goes |
-|---|---|---|
-| 1 | `app/tools/db_tool.py` | `_MOCK_HOTELS`, `_MOCK_RESTAURANTS`, `_MOCK_ATTRACTIONS`, `_MOCK_EVENTS` (~90 lines) |
-| 2 | `app/tools/db_tool.py` | `_MOCK_TOWN_COORDS`, `_get_mock_data()` |
-| 3 | `app/tools/db_tool.py` | the `except → "using mock data"` branch in `_get_listings` |
-| 4 | `app/tools/db_tool.py` | the same branch in `get_events` |
-| 5 | `app/tools/db_tool.py` | `get_user_profile`'s silent empty-dict default → explicit `ProfileUnavailable` |
-| 6 | `app/tools/db_tool.py` | `get_transit_info()` (returns a constant), `check_pickme_coverage()` (returns `True`) |
-| 7 | `app/workflows/recommendation_agent.py` | hardcoded event window `"2026-08-20"`–`"2026-08-23"`; the comment "Fetch raw mock candidates" |
-| 8 | `app/data/sri_lanka_districts.py` | whole file (→ `district` table) |
-| 9 | `app/utils/db_pool.py` | docstring's "callers fall back to their mock data" contract — pool failure now propagates as `DataUnavailable` |
-| 10 | `app/utils/session_store.py` | `trip_sessions.json` + the file itself in the repo root |
-| 11 | `app/tools/calendar_tool.py` | `calendar_tokens.json` local-file fallback (DB only) |
-| 12 | `tests/` | every fixture asserting mock behaviour → seeded test DB fixtures (`test_db_tool.py`, `test_recommendation_agent.py`, parts of `test_orchestrator.py`) |
+| # | File | What goes | Status |
+|---|---|---|---|
+| 1 | `app/tools/db_tool.py` | `_MOCK_HOTELS`, `_MOCK_RESTAURANTS`, `_MOCK_ATTRACTIONS`, `_MOCK_EVENTS` (~90 lines) | ✅ deleted |
+| 2 | `app/tools/db_tool.py` | `_MOCK_TOWN_COORDS`, `_get_mock_data()` | ✅ deleted |
+| 3 | `app/tools/db_tool.py` | the `except → "using mock data"` branch in `_get_listings` | ✅ replaced with `DataUnavailable` |
+| 4 | `app/tools/db_tool.py` | the same branch in `get_events` | ✅ replaced with `DataUnavailable` |
+| 5 | `app/tools/db_tool.py` | `get_user_profile`'s silent empty-dict default | ✅ kept as a legitimate default (not an error — see below), DB-unreachable now raises `DataUnavailable` |
+| 6 | `app/tools/db_tool.py` | `get_transit_info()`, `check_pickme_coverage()` | ✅ deleted in Phase 0 |
+| 7 | `app/workflows/recommendation_agent.py` | hardcoded event window `"2026-08-20"`–`"2026-08-23"` | ✅ replaced with `trip_dates`/duration-derived window |
+| 8 | `app/data/sri_lanka_districts.py` | whole file | ✅ deleted (Phase 3, once `db_tool.py`'s own import was the last real dependency) |
+| 9 | `app/utils/db_pool.py` | docstring's "callers fall back to mock data" contract | ✅ rewritten — behavior (`get_pool()` still returns `None`) unchanged, only the stale contract description |
+| 10 | `app/utils/session_store.py` | `trip_sessions.json` | ⏳ Phase 7 (session → `ai_session` table) |
+| 11 | `app/tools/calendar_tool.py` | `calendar_tokens.json` local-file fallback | ⏳ Phase 7 |
+| 12 | `tests/` | every fixture asserting mock behaviour | ✅ `test_db_tool.py` (21 tests), `test_recommendation_agent.py` (8 tests) rewritten; `test_planning_agent.py` (6 tests) added — that file never existed |
 
-**Replacement contract for `db_tool`:**
+**One clarification on #5, settled during implementation:** "no `traveler_profile` row yet" and "the
+database is unreachable" are genuinely different situations, not the same failure in two disguises.
+The former is expected (NestJS creates the row at registration) and correctly returns the same
+default dict as before. Only the latter raises `DataUnavailable`. Calling every empty result
+`DataUnavailable` would have been wrong — it would make the ordinary "brand new user" case look like
+an outage.
 
-```python
-class DataUnavailable(Exception):
-    """The database could not answer. Never swallowed, never substituted."""
+**A dependency this checklist didn't anticipate: verification.** Every ingested listing starts
+`is_verified = false` by design — real review is NestJS's admin panel (`backend/docs/BACKEND_PLAN.md`
+§2), which doesn't exist in this session's scope. Without it, "no mock data" would have meant "no
+data at all" for the whole system, since nothing could ever pass the `is_verified = true` filter.
+`app/data/verify_all_for_demo.py` is the explicit, loudly-documented stopgap — bulk-verifies the
+current dataset, and must be replaced (not just left running) once real admin review exists. See
+[`../../../backend/docs/BACKEND_ALIGNMENT.md`](../../../backend/docs/BACKEND_ALIGNMENT.md).
 
-async def search_listings(...) -> SearchResult:
-    """Returns SearchResult(items=[], total=0) when the query legitimately matches nothing.
-       Raises DataUnavailable when the database itself is unreachable.
-       These are different situations and must never again produce the same output."""
-```
-
-Conflating "no results" with "database is down" is the root of the current design's worst property:
-a plan built from mock data is indistinguishable, to the user, from a real one.
-
-**Verification:** `grep -ril "mock" app/` returns nothing, and `grep -rn "fallback" app/tools/` returns
-only the two intentional ones (haversine routing, template narration).
+**Verification, run live:** `grep -rli "mock" app/` returns only comments documenting the removal
+(checked individually — none operational). A real `/trip-plan` request for Ella returns genuine
+Badulla-district data by real listing ids, not mock-shaped placeholder names.

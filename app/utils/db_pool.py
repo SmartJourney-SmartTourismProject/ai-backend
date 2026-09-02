@@ -2,11 +2,15 @@
 Shared asyncpg connection pool for the async request path (db_tool.py,
 calendar_tool.py).
 
-Fails open, like app/utils/cache.py: if DATABASE_URL isn't configured, or the
-database can't be reached, get_pool() returns None and callers fall back to
-their mock data / local-file paths rather than raising. The AI backend must
-stay runnable with no database at all - that's what keeps the test suite
-network-free and lets someone run this service from a fresh clone.
+get_pool() itself still returns None (not an exception) when DATABASE_URL
+isn't configured or the database can't be reached - that's what keeps
+importing this module safe with no database at all (a fresh clone, the
+test suite, etc). What changed (decision D5, docs/master_plan/DATA_PLATFORM.md
+§9): callers no longer fall back to mock data on a None pool. db_tool.py's
+_require_pool() turns None into a raised DataUnavailable - the database
+being unreachable is now a real, surfaced failure, not a silent substitution
+with placeholder data. calendar_tool.py still has its own local-file
+fallback (a smaller, still-open item - see PROJECT_MASTER_PLAN.md §5 Phase 7).
 
 The batch ingest scripts do NOT use this - they run outside the event loop
 via APScheduler and use psycopg2 instead (see app/data/postgres_writer.py).
@@ -36,9 +40,9 @@ async def get_pool():
     database is unavailable for any reason.
 
     Deliberately does NOT latch the failure permanently: a transient outage
-    shouldn't silently pin this service to mock data for the rest of its
-    life. The 5s connect timeout bounds the cost of retrying while the
-    database is genuinely down, and recovery is automatic once it's back.
+    shouldn't permanently prevent recovery. The 5s connect timeout bounds
+    the cost of retrying while the database is genuinely down, and recovery
+    is automatic once it's back.
     """
     global _pool
 
@@ -47,7 +51,7 @@ async def get_pool():
     if not settings.database_url:
         # Not configured at all - expected on a fresh clone. Debug, not a
         # warning, so it doesn't cry wolf during normal standalone use.
-        logger.debug("DATABASE_URL not set; using mock/local fallbacks.")
+        logger.debug("DATABASE_URL not set; db_tool calls will raise DataUnavailable.")
         return None
 
     if _pool is None:
@@ -58,7 +62,7 @@ async def get_pool():
         except Exception as e:
             # Configured but unreachable - that IS worth a warning, since it
             # otherwise looks identical to "no database configured" while
-            # quietly serving mock data.
+            # actually being a real outage a DataUnavailable should surface.
             logger.warning(f"DATABASE_URL is set but the database is unreachable: {e}")
             return None
 

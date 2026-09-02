@@ -263,7 +263,8 @@ async function sendMessage() {
 
     document.getElementById('statusBar').textContent =
       'session_id: ' + sessionId +
-      (data.estimated_cost != null ? ' | estimated cost: ' + data.estimated_cost : '') +
+      (data.estimated_cost != null ? ' | estimated cost: ' + data.estimated_cost + ' ' + (data.currency || 'LKR') : '') +
+      (data.plan_source ? ' | plan_source: ' + data.plan_source : '') +
       (data.errors && data.errors.length ? ' | errors: ' + data.errors.join('; ') : '');
   } catch (err) {
     addMessage('Could not reach the API at ' + apiBase + ' — is the server running? (' + err + ')', 'error');

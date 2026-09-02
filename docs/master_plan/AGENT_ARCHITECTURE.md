@@ -376,6 +376,7 @@ What the system does when each piece fails. The rule throughout: **degrade with 
 | Failure | Behaviour | User sees |
 |---|---|---|
 | Geocoding finds nothing | Orchestrator retries with raw text, then origin; if all fail → clarification | "Which town or district in Sri Lanka did you mean?" |
+| **Destination resolves outside Sri Lanka** ✅ implemented (decision D17) | `slot_filling.py` checks `resolve_place()`'s confidence immediately after extracting `destination`, on both first and follow-up turns — routes straight to `respond`, never reaches location/calendar/weather/recommend/plan. Verified live: a `/trip-plan` request for Paris completes in one graph pass (`validate → policy → slot_fill → respond`), zero wasted downstream calls. | "SmartJourney currently covers destinations within Sri Lanka only. Paris is in France — is there a Sri Lankan destination I can help you plan instead?" |
 | District has no verified listings | Recommendation returns `coverage_notes`; planner builds what it can; if nothing → honest message | "I don't have verified listings for X yet." |
 | Weather unavailable | `per_day_weather = []`; outdoor filtering skipped; note added | "Weather data wasn't available, so I haven't adjusted for rain." |
 | Disaster sources all down | `{safe: true, note: "unavailable"}` (existing correct behaviour — keep it) | advisory note |

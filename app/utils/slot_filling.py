@@ -1,84 +1,22 @@
 # app/utils/slot_filling.py
-from typing import List, Optional
-
-from pydantic import BaseModel, Field
-
+from app.core.followup import classify_followup
 from app.core.llm import get_llm
 from app.core.state import TripState
+from app.models.schemas import ExtractedSlots
+from app.prompts import get_prompt
 from app.tools import db_tool
+from app.tools.db_tool import DataUnavailable
 from app.tools.geocode_tool import geocode_destination
+from app.tools.geo_tool import resolve_place
 
-
-
-class _ExtractedSlots(BaseModel):
-    """
-    Schema for what we ask the LLM to extract. Every field is Optional —
-    the model must leave anything not mentioned in user_input as null,
-    never guess. Downstream defaulting logic (user profile lookup, asking
-    the user, etc.) is a separate step's job, not this one's.
-    """
-    destination: Optional[str] = Field(
-        None, description="The travel destination, if mentioned. Null if not mentioned."
-    )
-    duration_days: Optional[int] = Field(
-        None, description="Trip length in days, if mentioned or inferable from phrases like 'a week' (=7). Null if not mentioned."
-    )
-    budget: Optional[float] = Field(
-        None, description="Total trip budget as a number, if mentioned. Null if not mentioned."
-    )
-    travelers: Optional[int] = Field(
-        None, description="Total number of travelers including the user, if mentioned or inferable (e.g. 'my wife and kid' = 3). Null if not mentioned."
-    )
-    interests: List[str] = Field(
-        default_factory=list,
-        description=(
-            "List of travel interests/activity types mentioned, as short, "
-            "singular, lowercase tags (e.g. 'beach' not 'beaches', 'hike' not "
-            "'hiking trips'). Empty list if none mentioned."
-        ),
-    )
-    origin_location: Optional[str] = Field(
-        None, description=(
-            "The place the traveler says they are starting/departing FROM, "
-            "if explicitly mentioned (e.g. 'I'm starting from Polonnaruwa', "
-            "'coming from Colombo', 'leaving from the airport'). This is the "
-            "traveler's ORIGIN, not their destination - never confuse the "
-            "two, and never guess this from the destination alone. Null if "
-            "no starting location was mentioned."
-        )
-    )
-
-
-_SYSTEM_PROMPT = """You extract structured trip-planning details from a
-traveler's message. Only extract what is explicitly stated or clearly
-inferable from specific wording (e.g. "a week" -> 7 days, "my wife and
-kid" -> 3 travelers).
-
-Do NOT fill in a field just because a trip is being discussed. In
-particular:
-- Do not default travelers to 1 just because the message is about a
-  trip. Only set travelers when the message actually indicates who is
-  going (e.g. "just me", "solo", "my family", a specific count).
-- Do not guess a duration, budget, or destination that isn't stated or
-  clearly implied.
-
-If a field is not mentioned, leave it null (or an empty list for
-interests) — do not use a "reasonable default." A missing value is the
-correct output when the user didn't say anything about that field.
-
-When listing interests, use short singular lowercase tags (e.g. "beach",
-"hike", "culture") - not plurals or full phrases.
-
-If the traveler mentions where they are starting/departing from - their
-origin, separate from their destination - extract it as origin_location.
-Do not confuse origin with destination; if only a destination is
-mentioned, leave origin_location null."""
+_PROMPT = get_prompt("slot_filling")   # app/prompts/slot_filling_prompt.py - the single source
+                                        # of both the prompt text and ExtractedSlots' schema
 
 
 async def fill_slots(state: TripState) -> TripState:
     """
-    Uses Gemini to extract destination/duration_days/budget/travelers/interests
-    from state.user_input.
+    Uses Gemini to extract destination/duration_days/budget/travelers/
+    interests/must_avoid/pace from state.user_input.
 
     Two modes:
     - First turn (state.is_followup is False): only fills fields the user
@@ -96,14 +34,23 @@ async def fill_slots(state: TripState) -> TripState:
     to state.errors) rather than raising.
     """
     try:
-        structured_llm = get_llm("slots").with_structured_output(_ExtractedSlots)
+        structured_llm = get_llm("slots").with_structured_output(_PROMPT.output_schema)
 
-        result: _ExtractedSlots = await structured_llm.ainvoke([
-            ("system", _SYSTEM_PROMPT),
+        result: ExtractedSlots = await structured_llm.ainvoke([
+            ("system", _PROMPT.system),
             ("human", state.user_input),
         ])
 
         if state.is_followup:
+            # Classified from THIS turn's raw extraction, before the merge
+            # below overwrites state - classify_followup needs to see what
+            # the message itself asked to change, not the already-carried
+            # values sitting on state.
+            plan = classify_followup(state.user_input, result)
+            state.followup_scope = plan.scope
+            state.followup_target_days = plan.target_days
+            state.followup_cheaper = plan.cheaper
+
             if result.destination:
                 state.destination = result.destination
             if result.duration_days:
@@ -114,6 +61,10 @@ async def fill_slots(state: TripState) -> TripState:
                 state.travelers = result.travelers
             if result.interests:
                 state.interests = result.interests
+            if result.must_avoid:
+                state.must_avoid = result.must_avoid
+            if result.pace:
+                state.pace = result.pace
         else:
             if state.destination is None and result.destination:
                 state.destination = result.destination
@@ -125,6 +76,10 @@ async def fill_slots(state: TripState) -> TripState:
                 state.travelers = result.travelers
             if not state.interests and result.interests:
                 state.interests = result.interests
+            if not state.must_avoid and result.must_avoid:
+                state.must_avoid = result.must_avoid
+            if state.pace is None and result.pace:
+                state.pace = result.pace
 
         # A named origin only matters when we don't already have a real
         # start_location - GPS/IP resolution (done by the API layer before
@@ -144,6 +99,28 @@ async def fill_slots(state: TripState) -> TripState:
     except Exception as e:
         state.errors.append(f"slot_filling failed: {e}")
 
+    # Country-scoping check (project decision, 2026-09-02): SmartJourney
+    # covers Sri Lanka only. Runs for both first-turn and follow-up turns -
+    # a follow-up can change the destination too ("actually let's go to
+    # Paris instead"), so this must run before the is_followup early return
+    # below, not after it. geo_tool.resolve_place() distinguishes a genuine
+    # foreign destination from a real Sri Lankan place via a settlement-class
+    # filter on a country-restricted Nominatim search (see geo_tool.py's
+    # module docstring) - it does not just check whether geocoding succeeded.
+    if state.destination:
+        try:
+            place = await resolve_place(state.destination)
+        except Exception as e:
+            place = None
+            state.errors.append(f"destination country check failed: {e}")
+        if place and place["confidence"] == "out_of_country":
+            state.clarification_needed = (
+                f"SmartJourney currently covers destinations within Sri Lanka only. "
+                f"{state.destination} is in {place['country']} — is there a Sri Lankan "
+                f"destination I can help you plan instead?"
+            )
+            return state
+
     if state.is_followup:
         return state
 
@@ -153,13 +130,20 @@ async def fill_slots(state: TripState) -> TripState:
         state.duration_days = 1
 
     if state.user_id:
-        profile = await db_tool.get_user_profile(state.user_id)
-        if not state.interests and profile.get("interests"):
-            state.interests = profile["interests"]
-        if state.travel_style is None and profile.get("travel_style"):
-            state.travel_style = profile["travel_style"]
-        if state.budget is None and profile.get("budget"):
-            state.budget = profile["budget"]
+        # Profile lookup is advisory (fills gaps, never required to plan a
+        # trip) - a DB outage here degrades gracefully with a soft note
+        # (same "advisory, not fatal" pattern as orchestrator.py's
+        # location_unresolved), not a hard failure of slot filling.
+        try:
+            profile = await db_tool.get_user_profile(state.user_id)
+            if not state.interests and profile.get("interests"):
+                state.interests = profile["interests"]
+            if state.travel_style is None and profile.get("travel_style"):
+                state.travel_style = profile["travel_style"]
+            if state.budget is None and profile.get("budget"):
+                state.budget = profile["budget"]
+        except DataUnavailable as e:
+            state.errors.append(f"profile_unavailable: {e}")
 
     if state.destination is None:
         state.clarification_needed = "Which destination would you like to visit?"

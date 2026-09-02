@@ -123,7 +123,19 @@ class Settings(BaseSettings):
     usd_lkr_rate: float = 310.0
 
     # ===== ReAct bounds (AGENT_ARCHITECTURE.md §2.1) =====
-    react_max_steps: int = 6
+    # The single place to change how many ReAct turns an agent gets before
+    # it's forced to answer with whatever it's observed so far
+    # (app/core/react.py's ReActConfig.max_steps reads this by default) -
+    # change here, or set REACT_MAX_STEPS in .env, and every agent picks it
+    # up without touching app/agents/*.py. Capped at 3 (2026-09-02): each
+    # extra step is a real LLM call, and 3 was judged enough turns for the
+    # tool catalogs involved (no agent needs more than 6 tools) without
+    # letting a confused run rack up cost/latency chasing a bad path.
+    react_max_steps: int = 3
+    # Same single-knob pattern, for total tool executions per agent run
+    # (a cached repeat of an identical call is free, see react.py). Every
+    # agent used to hardcode its own value here (12/10/10/6) - centralized
+    # 2026-09-02 so tuning this is one number, not four call sites.
     react_tool_budget: int = 12
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

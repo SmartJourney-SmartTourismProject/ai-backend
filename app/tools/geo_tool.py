@@ -85,19 +85,20 @@ _NEAREST_MAX_METERS = 30_000
 
 _CACHE_SELECT_SQL = """
     SELECT display_name, ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lon,
-           district_id, confidence
+           district_id, confidence, country
     FROM geo_resolution
     WHERE query_norm = $1
 """
 _CACHE_UPSERT_SQL = """
-    INSERT INTO geo_resolution (query_norm, display_name, location, district_id, confidence, provider)
-    VALUES ($1, $2, ST_SetSRID(ST_MakePoint($4, $3), 4326)::geography, $5, $6, $7)
+    INSERT INTO geo_resolution (query_norm, display_name, location, district_id, confidence, provider, country)
+    VALUES ($1, $2, ST_SetSRID(ST_MakePoint($4, $3), 4326)::geography, $5, $6, $7, $8)
     ON CONFLICT (query_norm) DO UPDATE SET
         display_name = EXCLUDED.display_name,
         location = EXCLUDED.location,
         district_id = EXCLUDED.district_id,
         confidence = EXCLUDED.confidence,
         provider = EXCLUDED.provider,
+        country = EXCLUDED.country,
         resolved_at = now()
 """
 
@@ -202,7 +203,7 @@ async def _geocode_via_nominatim(name: str) -> Optional[dict]:
 
 async def resolve_place(name: str) -> Optional[PlaceResolution]:
     """
-    Place name -> {name, lat, lon, district_id, confidence}.
+    Place name -> {name, lat, lon, district_id, confidence, country}.
 
     Order (docs/master_plan/DATA_PLATFORM.md §4.3):
       1. geo_resolution cache (permanent - place names don't move)
@@ -210,6 +211,13 @@ async def resolve_place(name: str) -> Optional[PlaceResolution]:
       3. Nominatim (rate-limited to 1 req/s by policy; only reached on a cache miss)
     Google Geocoding is intentionally not wired here - optional/needs
     billing, and Nominatim + the cache already cover this app's scope.
+
+    A destination outside Sri Lanka comes back with confidence
+    "out_of_country" and a district_id of None - the project's scope is
+    Sri Lanka only, so callers must check for this explicitly and surface a
+    clear message rather than silently continuing with no district. Cached
+    the same as a real match, so a repeated out-of-scope destination is
+    answered instantly rather than re-querying Nominatim every time.
 
     Every successful resolution is written back to geo_resolution, so a
     repeated destination never leaves the database again.
@@ -225,8 +233,11 @@ async def resolve_place(name: str) -> Optional[PlaceResolution]:
         geo = await _geocode_via_nominatim(name)
         if geo is None:
             return None
+        if not geo["in_sri_lanka"]:
+            return {"name": geo["display_name"], "lat": geo["lat"], "lon": geo["lon"],
+                    "district_id": None, "confidence": "out_of_country", "country": geo["country"]}
         return {"name": geo["display_name"], "lat": geo["lat"], "lon": geo["lon"],
-                "district_id": None, "confidence": "medium"}
+                "district_id": None, "confidence": "medium", "country": "Sri Lanka"}
 
     try:
         cached = await pool.fetchrow(_CACHE_SELECT_SQL, query_norm)
@@ -234,19 +245,20 @@ async def resolve_place(name: str) -> Optional[PlaceResolution]:
             return {
                 "name": cached["display_name"], "lat": cached["lat"], "lon": cached["lon"],
                 "district_id": str(cached["district_id"]) if cached["district_id"] else None,
-                "confidence": cached["confidence"],
+                "confidence": cached["confidence"], "country": cached["country"],
             }
     except Exception as e:
         logger.warning(f"geo_resolution cache lookup failed for '{name}': {e}")
 
     # Trigram match against district names - lets "kandy district" or a
-    # near-miss spelling resolve without a network call.
+    # near-miss spelling resolve without a network call. Only ever matches
+    # a real Sri Lankan district row, so no out-of-country case applies here.
     try:
         row = await pool.fetchrow(_DISTRICT_NAME_SQL, name)
         if row:
             result: PlaceResolution = {
                 "name": row["name"], "lat": row["lat"], "lon": row["lon"],
-                "district_id": str(row["id"]), "confidence": "high",
+                "district_id": str(row["id"]), "confidence": "high", "country": "Sri Lanka",
             }
             await _write_cache(pool, query_norm, result, provider="district_table")
             return result
@@ -257,11 +269,19 @@ async def resolve_place(name: str) -> Optional[PlaceResolution]:
     if geo is None:
         return None
 
+    if not geo["in_sri_lanka"]:
+        result = {
+            "name": geo["display_name"], "lat": geo["lat"], "lon": geo["lon"],
+            "district_id": None, "confidence": "out_of_country", "country": geo["country"],
+        }
+        await _write_cache(pool, query_norm, result, provider="nominatim")
+        return result
+
     district = await resolve_district(geo["lat"], geo["lon"])
     result = {
         "name": geo["display_name"], "lat": geo["lat"], "lon": geo["lon"],
         "district_id": district["district_id"] if district else None,
-        "confidence": "high" if district else "medium",
+        "confidence": "high" if district else "medium", "country": "Sri Lanka",
     }
     await _write_cache(pool, query_norm, result, provider="nominatim")
     return result
@@ -272,7 +292,7 @@ async def _write_cache(pool, query_norm: str, result: dict, provider: str) -> No
         await pool.execute(
             _CACHE_UPSERT_SQL,
             query_norm, result["name"], result["lat"], result["lon"],
-            result["district_id"], result["confidence"], provider,
+            result["district_id"], result["confidence"], provider, result.get("country"),
         )
     except Exception as e:
         logger.warning(f"geo_resolution cache write failed for '{query_norm}': {e}")

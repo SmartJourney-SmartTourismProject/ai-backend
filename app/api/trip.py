@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.config.settings import settings
 from app.core.state import TripState
 from app.core.orchestrator import orchestrator
+from app.tools.db_tool import get_data_freshness
 from app.tools.location_tool import resolve_start_location
 from app.utils.session_store import load_session, save_session
 
@@ -40,13 +41,27 @@ class TripPlanResponse(BaseModel):
     destination: Optional[str] = None
     itinerary: list = []
     estimated_cost: Optional[float] = None
+    currency: str = "LKR"
     budget_notes: Optional[str] = None
+    # "llm" (the planner ReAct agent produced this, possibly after one
+    # repair) or "fallback" (app/core/fallback.py's deterministic planner -
+    # see PROJECT_MASTER_PLAN.md's Phase 6 writeup for why this is common
+    # today, not a bug). None only when no plan was built at all (e.g. a
+    # clarification response).
+    plan_source: Optional[str] = None
+    # ISO timestamp of the oldest successful sync among enabled data
+    # sources (app/tools/db_tool.py's get_data_freshness) - None if unknown
+    # or any enabled source has never synced. Informational only; never
+    # blocks or changes the plan itself.
+    data_freshness: Optional[str] = None
     weather: Optional[dict] = None
     disaster: Optional[dict] = None
     final_response: Optional[str] = None
     errors: list[str] = []
-    # Debug-only field, per §7 - never populated unless settings.debug=True.
-    completed_steps: list[str] = []
+    # Debug-only, per §7 - never populated unless settings.debug=True.
+    # Renamed from completed_steps (Phase 7): now carries both the step
+    # sequence and each ReAct agent's trace summary, not just step names.
+    trace: dict = {}
 
 
 @router.post("/trip-plan", response_model=TripPlanResponse)
@@ -69,7 +84,7 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
     start_location = await resolve_start_location(client_gps, client_ip)
 
     session_id = payload.session_id or str(uuid.uuid4())
-    carried_over = load_session(session_id) if payload.session_id else None
+    carried_over = await load_session(session_id) if payload.session_id else None
 
     initial_state = TripState(
         user_input=payload.message,
@@ -87,19 +102,29 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
 
     result = await orchestrator.ainvoke(initial_state)
 
-    save_session(session_id, TripState(**result))
+    await save_session(session_id, TripState(**result))
+
+    trace = {}
+    if settings.debug:
+        trace = {
+            "completed_steps": result.get("completed_steps", []),
+            "react_traces": result.get("react_traces", {}),
+        }
 
     return TripPlanResponse(
         session_id=session_id,
         destination=result.get("destination"),
         itinerary=result.get("itinerary", []),
         estimated_cost=result.get("estimated_cost"),
+        currency="LKR",
         budget_notes=result.get("budget_notes"),
+        plan_source=result.get("plan_source"),
+        data_freshness=await get_data_freshness(),
         weather=result.get("weather"),
         disaster=result.get("disaster"),
         final_response=result.get("final_response"),
         errors=result.get("errors", []),
-        completed_steps=result.get("completed_steps", []) if settings.debug else [],
+        trace=trace,
     )
 
 # -----------------------------------------------------------------------------
@@ -107,7 +132,7 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
 # -----------------------------------------------------------------------------
 # 1. State Encapsulation:
 # TripPlanResponse exposes only a curated subset of TripState. Internal-only
-# fields (e.g., candidate_attractions) are never exposed at all; completed_steps
+# fields (e.g., candidate_attractions) are never exposed at all; `trace`
 # is a debug field only populated when settings.debug=True (see below). This
 # ensures we never dump internal state objects straight out of the API
 # to the consumer (Flutter/Next.js frontend).
