@@ -140,20 +140,61 @@ async def resolve_district(lat: float, lon: float) -> Optional[DistrictMatch]:
         return None
 
 
+async def _nominatim_search(client: httpx.AsyncClient, name: str, countrycodes: Optional[str]) -> Optional[dict]:
+    params = {"q": name, "format": "json", "limit": 1, "addressdetails": 1}
+    if countrycodes:
+        params["countrycodes"] = countrycodes
+    resp = await client.get(NOMINATIM_URL, params=params)
+    resp.raise_for_status()
+    data = resp.json()
+    return data[0] if data else None
+
+
 async def _geocode_via_nominatim(name: str) -> Optional[dict]:
+    """
+    Two-step: try a Sri-Lanka-restricted search first, but only accept it if
+    the match is settlement-class (see _SETTLEMENT_CLASSES above) - a
+    restricted search still does fuzzy full-text matching, so a foreign
+    name with no real Sri Lankan counterpart ("Paris") returns *something*
+    (a residential lane named "Paris Perera Lane") rather than nothing, and
+    that false positive must be rejected, not trusted.
+
+    If step 1 doesn't give a confident match, fall back to an unrestricted
+    global search and report the real country - this is what lets the
+    caller distinguish "Sri Lankan place we haven't seen phrased this way"
+    from "a real place, just not in Sri Lanka."
+
+    Returns {lat, lon, display_name, in_sri_lanka, country} or None if
+    nothing resolved anywhere.
+    """
     try:
         async with httpx.AsyncClient(timeout=10.0, headers=UA) as client:
-            resp = await client.get(NOMINATIM_URL, params={
-                "q": f"{name}, Sri Lanka", "format": "json", "limit": 1,
-            })
-            resp.raise_for_status()
-            data = resp.json()
-            if data:
+            sl_match = await _nominatim_search(client, name, countrycodes="lk")
+            if sl_match and sl_match.get("class") in _SETTLEMENT_CLASSES:
                 return {
-                    "lat": float(data[0]["lat"]),
-                    "lon": float(data[0]["lon"]),
-                    "display_name": data[0].get("display_name", name),
+                    "lat": float(sl_match["lat"]), "lon": float(sl_match["lon"]),
+                    "display_name": sl_match.get("display_name", name),
+                    "in_sri_lanka": True, "country": "Sri Lanka",
                 }
+
+            global_match = await _nominatim_search(client, name, countrycodes=None)
+            if global_match is None:
+                return None
+            country_code = global_match.get("address", {}).get("country_code")
+            if country_code == "lk":
+                # The unrestricted search itself found a real Sri Lankan
+                # place the restricted search missed/misjudged - trust it.
+                return {
+                    "lat": float(global_match["lat"]), "lon": float(global_match["lon"]),
+                    "display_name": global_match.get("display_name", name),
+                    "in_sri_lanka": True, "country": "Sri Lanka",
+                }
+            return {
+                "lat": float(global_match["lat"]), "lon": float(global_match["lon"]),
+                "display_name": global_match.get("display_name", name),
+                "in_sri_lanka": False,
+                "country": global_match.get("address", {}).get("country") or "elsewhere",
+            }
     except Exception as e:
         logger.warning(f"Nominatim geocode failed for '{name}': {e}")
     return None
