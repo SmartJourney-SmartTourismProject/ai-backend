@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 from typing import Any, List
-from langchain_google_genai import ChatGoogleGenerativeAI
 
-from app.config.settings import settings
 from app.core.base_agent import BaseAgent
+from app.core.llm import get_llm
 from app.core.result import AgentResult
 from app.core.state import TripState
 from app.tools import db_tool
@@ -31,9 +30,10 @@ class RecommendationAgent(BaseAgent):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.llm = ChatGoogleGenerativeAI(
-            model=settings.llm_model, temperature=settings.llm_temperature
-        )
+        # get_llm() is the single construction point (app/core/llm.py) - carries
+        # the API key, temperature, and provider failover chain consistently,
+        # unlike constructing ChatGoogleGenerativeAI(...) directly here.
+        self.llm = get_llm("recommend")
         self.system_prompt = RECOMMENDATION_PLANNING_SYSTEM_PROMPT
 
     async def execute(self, state: TripState) -> AgentResult:

@@ -23,12 +23,16 @@ def _payload_section(prompt: str) -> str:
 
 
 def _patch_llm(monkeypatch, response_dict: dict):
+    # get_llm() (app/core/llm.py) is the single construction point now -
+    # RecommendationAgent.__init__ calls get_llm("recommend"), so that's the
+    # seam to mock (no module-level ChatGoogleGenerativeAI symbol exists
+    # here anymore after the D6b rewiring).
     mock_response = MagicMock()
     mock_response.content = json.dumps(response_dict)
     mock_llm_instance = MagicMock()
     mock_llm_instance.ainvoke = AsyncMock(return_value=mock_response)
     monkeypatch.setattr(
-        recommendation_agent_module, "ChatGoogleGenerativeAI",
+        recommendation_agent_module, "get_llm",
         MagicMock(return_value=mock_llm_instance),
     )
     return mock_llm_instance
@@ -151,7 +155,7 @@ async def test_llm_failure_returns_failure_not_raises(monkeypatch):
     mock_llm_instance = MagicMock()
     mock_llm_instance.ainvoke = AsyncMock(side_effect=RuntimeError("API down"))
     monkeypatch.setattr(
-        recommendation_agent_module, "ChatGoogleGenerativeAI",
+        recommendation_agent_module, "get_llm",
         MagicMock(return_value=mock_llm_instance),
     )
     state = TripState(user_input="Plan a trip to Kandy", destination="Kandy")

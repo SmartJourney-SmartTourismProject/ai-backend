@@ -11,7 +11,7 @@ ingestion scripts can still be run and tested without a live database.
 """
 from __future__ import annotations
 import logging
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Union
 
 from app.config.settings import settings
 
@@ -118,18 +118,23 @@ def has_column(table: str, column: str) -> bool:
 def upsert_rows(
     table: str,
     rows: list[dict[str, Any]],
-    on_conflict: str,
+    on_conflict: Union[str, Iterable[str]],
     geo_columns: Iterable[str] = (),
 ) -> int:
     """
-    Upsert rows into `table`, matching on `on_conflict` (e.g. "external_ref").
-    Returns the number of rows written. No-ops (returns 0) if the database
-    isn't configured, so ingestion can still be run/tested without one.
+    Upsert rows into `table`, matching on `on_conflict` - a single column
+    name ("external_ref") or an iterable of columns for a compound unique
+    constraint (("source", "external_ref"), matching travel_listing's real
+    UNIQUE (source, external_ref)). Returns the number of rows written.
+    No-ops (returns 0) if the database isn't configured, so ingestion can
+    still be run/tested without one.
 
     `geo_columns` names the columns holding PostGIS WKT (from to_point_wkt).
     Those bind through ST_GeogFromText() instead of as plain text - Postgres
     will not implicitly cast a string into a geography column, so omitting a
-    geography column here fails the insert.
+    geography column here fails the insert. Plain list/array columns (e.g.
+    tags text[]) need no special handling - psycopg2 adapts a Python list to
+    a Postgres array automatically.
 
     All rows must share the same keys (the ingestion scripts build them from a
     fixed template, so they do).
@@ -141,6 +146,7 @@ def upsert_rows(
     if conn is None:
         return 0
 
+    conflict_cols = [on_conflict] if isinstance(on_conflict, str) else list(on_conflict)
     geo = set(geo_columns)
     columns = list(rows[0].keys())
     # ST_GeogFromText() for geography columns, plain %s for everything else.
@@ -148,11 +154,11 @@ def upsert_rows(
         f"ST_GeogFromText(%s)" if col in geo else "%s" for col in columns
     )
     updates = ", ".join(
-        f"{col} = EXCLUDED.{col}" for col in columns if col != on_conflict
+        f"{col} = EXCLUDED.{col}" for col in columns if col not in conflict_cols
     )
     sql = (
         f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) "
-        f"ON CONFLICT ({on_conflict}) DO UPDATE SET {updates}"
+        f"ON CONFLICT ({', '.join(conflict_cols)}) DO UPDATE SET {updates}"
     )
 
     try:

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from langchain_google_genai import ChatGoogleGenerativeAI
 
-from app.config.settings import settings
 from app.core.base_agent import BaseAgent
+from app.core.llm import get_llm
 from app.core.result import AgentResult
 from app.core.state import TripState
 from app.prompts.planning_prompt import PLANNING_SYSTEM_PROMPT
@@ -15,9 +14,7 @@ class PlanningAgent(BaseAgent):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.llm = ChatGoogleGenerativeAI(
-            model=settings.llm_model, temperature=settings.llm_temperature
-        )
+        self.llm = get_llm("plan")
 
     async def execute(self, state: TripState) -> AgentResult:
         if not state.recommendations:

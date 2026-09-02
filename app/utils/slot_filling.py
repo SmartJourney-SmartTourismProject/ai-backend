@@ -2,9 +2,8 @@
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
-from langchain_google_genai import ChatGoogleGenerativeAI
 
-from app.config.settings import settings
+from app.core.llm import get_llm
 from app.core.state import TripState
 from app.tools import db_tool
 from app.tools.geocode_tool import geocode_destination
@@ -97,12 +96,7 @@ async def fill_slots(state: TripState) -> TripState:
     to state.errors) rather than raising.
     """
     try:
-        llm = ChatGoogleGenerativeAI(
-            model=settings.llm_model,
-            google_api_key=settings.gemini_api_key,
-            temperature=0,
-        )
-        structured_llm = llm.with_structured_output(_ExtractedSlots)
+        structured_llm = get_llm("slots").with_structured_output(_ExtractedSlots)
 
         result: _ExtractedSlots = await structured_llm.ainvoke([
             ("system", _SYSTEM_PROMPT),

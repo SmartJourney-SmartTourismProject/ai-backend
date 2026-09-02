@@ -1,0 +1,17 @@
+district,category,price_level,unit,typical_cost,source_note
+,hotel,1,per_night,4500,national guesthouse baseline
+,hotel,2,per_night,12000,national mid-range
+,hotel,3,per_night,28000,national upper-mid
+,hotel,4,per_night,65000,national luxury
+,restaurant,1,per_meal,600,local rice & curry
+,restaurant,2,per_meal,1800,casual sit-down
+,restaurant,3,per_meal,4500,upscale
+,restaurant,4,per_meal,9000,fine dining
+,attraction,1,per_entry,0,free/public
+,attraction,2,per_entry,1500,local ticket
+,attraction,3,per_entry,5000,foreign-visitor ticket
+,attraction,4,per_entry,12000,premium/heritage site
+,transport,2,per_km,60,tuk-tuk / rideshare
+Colombo,hotel,2,per_night,16000,capital premium
+Colombo,restaurant,2,per_meal,2500,capital premium
+Nuwara Eliya,hotel,2,per_night,14000,hill-country season premium

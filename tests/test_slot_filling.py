@@ -10,11 +10,15 @@ from app.core.state import TripState
 
 
 def _patch_llm(monkeypatch, extracted: _ExtractedSlots):
+    # get_llm() (app/core/llm.py) is the single construction point now -
+    # slot_filling.py calls get_llm("slots").with_structured_output(...),
+    # so that's the seam to mock, not a module-level ChatGoogleGenerativeAI
+    # symbol (which no longer exists here after the D6b rewiring).
     mock_structured = MagicMock()
     mock_structured.ainvoke = AsyncMock(return_value=extracted)
     mock_llm_instance = MagicMock()
     mock_llm_instance.with_structured_output.return_value = mock_structured
-    monkeypatch.setattr(slot_filling_module, "ChatGoogleGenerativeAI", MagicMock(return_value=mock_llm_instance))
+    monkeypatch.setattr(slot_filling_module, "get_llm", MagicMock(return_value=mock_llm_instance))
 
 
 async def test_full_details_extracted(monkeypatch):
@@ -228,7 +232,7 @@ async def test_origin_location_works_on_followup_turn(monkeypatch):
 
 async def test_llm_failure_degrades_without_raising(monkeypatch):
     monkeypatch.setattr(
-        slot_filling_module, "ChatGoogleGenerativeAI",
+        slot_filling_module, "get_llm",
         MagicMock(side_effect=RuntimeError("API down")),
     )
     state = TripState(user_input="Plan a trip to Kandy")

@@ -197,23 +197,98 @@ Estimates are focused working days for one developer. Total **≈ 12.5 days**. P
 
 **Gate:** `scripts/check_apis.py` shows every required key green, app boots, `pytest` green (some tests will need the deleted-stub assertions removed), `/api/health` OK.
 
-### Phase 1 — Database, in Docker · 1.5 d
-1. `backend/docker-compose.yml`: keep PostGIS, add `redis`, add `./db/migrations` mount + init, keep the healthcheck.
-2. Write `backend/db/migrations/0001_init.sql` — the full DDL from [`DATA_PLATFORM.md §2`](DATA_PLATFORM.md) (14 tables, PostGIS, all indexes).
-3. Write `backend/db/migrate.py` (or `.sh`) — idempotent, tracks applied files in `schema_migration`.
-4. Write `app/data/seed_districts.py` — pulls the 25 district **relations with boundary geometry** from Overpass, upserts into `district`. Run once.
-5. Delete `app/data/sri_lanka_districts.py`; repoint `overpass_ingest`/`events_ingest` at the table.
+**✅ Phase 0 complete — 2026-09-02.** `settings.py` rewritten; `app/core/llm.py` built and
+live-verified (structured output survives `.with_fallbacks()` in real production code, confirmed
+via a live `fill_slots()` call, not just construction); all three existing LLM call sites
+(`slot_filling.py`, `recommendation_agent.py`, `planning_agent.py`) rewired to `get_llm()`, closing
+the exact "forgot to pass the API key" bug class D6b exists to prevent; dead stubs deleted
+(`check_pickme_coverage`, `get_transit_info`, the uncollected root `test_recommendation_agent.py`
+which — found along the way — hit real Gemini and would have broken the "no network calls"
+guarantee if anyone ran it directly); RAG deps split into `requirements-rag.txt`,
+`enable_rag=False` by default. `python scripts/check_apis.py` → **all 14 services green**
+(7 required + 7 optional/low-value, including a real PKCE bug found and fixed in Google Calendar
+OAuth along the way). Full suite: **131 passed**.
 
-**Gate:** `docker compose up -d` healthy; `SELECT count(*) FROM district` = 25 **and** `SELECT name FROM district WHERE ST_Contains(boundary::geometry, ST_SetSRID(ST_Point(81.0467, 6.8658),4326))` returns `Badulla` (that's Ella). This single query is the proof that #1 is fixed.
+### Phase 1 — Database, in Docker · 1.5 d ✅ complete 2026-09-02
+1. `backend/docker-compose.yml`: PostGIS + `redis`, `./db/init` mount for extensions, healthchecks. Done in Phase 0a.
+2. `backend/db/migrations/0000_meta.sql`, `0001_core.sql` (14 tables), `0002_identity_planning.sql` (NestJS's domain, created here per D13 so both services share one schema from day one — 12 more tables).
+3. `backend/db/migrate.py` — idempotent, checksum-tracked in `schema_migration`. Live-tested: applies cleanly, re-run is a no-op, and a tampered already-applied file aborts loudly rather than silently reapplying (verified by deliberately editing `0000_meta.sql` post-apply and confirming the abort + exact checksum diff).
+4. `app/data/seed_districts.py` — **two live sources, not one.** Overpass enumerates the 25 admin_level=5 relations (real OSM relation ids, for provenance); Nominatim (`polygon_geojson=1` + `addressdetails=1`) supplies each district's province and a pre-assembled boundary polygon. Nominatim's own ring assembly was used deliberately over hand-stitching Overpass relation members into a MultiPolygon — far more reliable. Live run: **25/25 seeded**, all provinces correct, boundaries carry 245–671 vertices each (real geometry, not bounding boxes). Overpass's mirror-rotation-with-retry (from `DATA_PLATFORM.md §5.2`) was exercised for real — the primary instance 504'd and a mirror 500'd on the actual run, and the retry loop recovered without manual intervention.
+5. `app/tools/geo_tool.py` — `resolve_place()` and `resolve_district()`, live-tested against the seeded database (not just unit-mocked): cache miss → Nominatim → `resolve_district()` → cache write, then a repeat call hits the cache and returns byte-identical coordinates. 12 unit tests added (`tests/test_geo_tool.py`), no network, all passing.
+6. **`app/data/sri_lanka_districts.py` kept for now, not deleted** — three call sites still import it (`db_tool.py`, `overpass_ingest.py`, `events_ingest.py`), and deleting it without fixing those in the same breath would just break the app on import for no benefit. Its real removal happens exactly where those files' real rewrites happen: `overpass_ingest`/`events_ingest` in Phase 2 (ingestion connectors), `db_tool.py` in Phase 3 (kill mocks). This is a correctness-driven resequencing of the original wording, not a skipped step.
 
-### Phase 2 — Ingestion connectors + scheduler · 2 d
-1. `app/data/connectors/` — `base.py` (the `Connector` protocol), then `osm_listings.py`, `wikidata_enrich.py`, `foursquare_enrich.py`, `booking_prices.py`, `ticketmaster_events.py`.
-2. `app/data/pipeline.py` — runs `district × connector`, writes `data_source_run` rows, `--source`/`--district` CLI flags, idempotent upsert on `(source, external_ref)`.
-3. `app/scheduler.py` — nightly 02:30 Asia/Colombo full run; per-source cadence from the registry table.
-4. Seed `cost_reference` (district × category × price_level → typical LKR cost) from the CSV in [`DATA_PLATFORM.md §6`](DATA_PLATFORM.md).
-5. `travel_time` cache table + `app/tools/routing_tool.py` (OpenRouteService free tier, haversine fallback).
+**Gate — passed, live, 2026-09-02:**
+```sql
+SELECT count(*) FROM district;                                                       -- 25
+SELECT name, province FROM district
+ WHERE ST_Contains(boundary, ST_SetSRID(ST_Point(81.0467, 6.8658),4326));             -- Badulla District | Uva Province
+```
+Both confirmed against the real seeded database. This is the proof that #1 is fixed — Ella resolves
+to its district by real polygon containment, not a lookup table.
 
-**Gate:** a full pipeline run populates ≥ 2,000 verified-able listings across 25 districts, ≥ 1 event source runs clean, `data_source_run` shows all-green, and a re-run changes `rows_upserted` but not row count (idempotency proof).
+### Phase 2 — Ingestion connectors + scheduler · 2 d ✅ complete 2026-09-02
+1. `app/data/connectors/` — `base.py` (the `Connector` protocol + district/tag/category lookup
+   helpers), then `osm_listings.py`, `booking_prices.py`, `ticketmaster_events.py`,
+   `wikidata_enrich.py`, `foursquare_enrich.py`.
+2. `app/data/pipeline.py` — runs `district × connector`, writes `data_source_run` rows,
+   `--source`/`--district`/`--due-only`/`--dry-run` CLI flags, idempotent upsert on
+   `(source, external_ref)`. Also `run_sync()` — see the event-loop finding below.
+3. `app/scheduler.py` — one nightly 02:30 job (not one per connector) that runs whatever's due per
+   its own cadence, plus `session_gc` (04:00 daily) and `travel_time_gc` (Mon 04:10).
+4. `app/data/seed_reference.py` + `tag_mapping.csv` (25 OSM-tag → canonical-tag mappings) +
+   `cost_reference.csv` (16 rows) — seeded: 12 tags, 25 mappings, 16 cost rows.
+5. `app/tools/routing_tool.py` — ORS (real many-to-many matrix, verified live) → haversine with the
+   distance-banded fallback from D6b/API_SETUP §3.1.1. 9 tests, all passing.
+
+**Gate — passed, live, 2026-09-02:** full 25-district `osm_listings` run →
+**6,572 listings across all 25/25 districts** (3.3× the ≥2,000 target). Idempotency proven directly:
+re-ran Kandy twice, 526 → 526 rows both times, `rows_upserted` non-zero both runs. `ticketmaster_events`
+ran clean (status `partial`, 0 events — the documented Sri Lanka coverage gap, not a failure) and
+`booking_prices` ran `success` (13/20 Kandy hotels priced) — both tracked correctly in
+`data_source_run` via the pipeline path.
+
+**A third real bug, found closing out the 25/25 number:** Kurunegala District returned 0 listings
+on the first full run — looked like the same transient Overpass instability seen all through this
+run, but wasn't. Querying the bare `area["name"="Kurunegala District"]["admin_level"="5"]` clause
+alone (no node filters) returned a genuinely empty area — Overpass's `area` index is a
+separately-maintained derived index that can lag or miss for a specific relation even when the
+relation itself resolves fine. Since Phase 1 already stores each district's real
+`osm_relation_id`, switched every query to `rel(<id>);map_to_area->.searchArea;` instead of
+name matching — bypasses that index entirely. Confirmed fixed: the identical query that returned 0
+by name returned 23 hotels by relation id; the full connector run then found 88. This is a strictly
+better query strategy than the plan originally specified (name-based), not just a workaround for
+one district — kept as the default, with a name-based fallback only for a `District` built without
+an id (e.g. a unit test).
+
+**Two real bugs found and fixed during this phase, not anticipated in the original plan:**
+
+- **A live-reproduced event-loop freeze.** `pipeline.run()`'s connector construction happened
+  eagerly for the *whole* registry on every call regardless of `--source` (`_load_registry()`
+  built `OSMListingsConnector()` even when only `ticketmaster_events` was requested), and
+  `OSMListingsConnector.__init__` does a blocking synchronous DB call. Triggering
+  `/api/admin/sync/listings` from a running server scheduled this via `asyncio.create_task()` —
+  reproduced live: the entire FastAPI server stopped answering *any* request for the sync's full
+  duration. Fixed two ways together: connectors now construct lazily and only the requested one
+  (`_get_connector()`, via `asyncio.to_thread`), and the admin endpoints + nightly scheduler job
+  now dispatch the **entire** pipeline run through one worker thread (`pipeline.run_sync()` via
+  `run_in_executor`/`to_thread`) rather than awaiting it inline — matching the original
+  `overpass_ingest.py`'s proven-safe `run_in_executor` pattern, just retargeted. Verified after the
+  fix: `/api/health` answered in ~0.27s while a full district sync ran in the background.
+- **`run()`'s unknown-source check ran after the code that already crashed on it** — a typo'd
+  `--source` raised a raw `KeyError` instead of the intended `[FATAL] Unknown source` message.
+  Caught by a test written against the intended behavior, not by manual testing.
+
+**One correction to the plan's original data-source assumptions**, detailed in
+[`API_SETUP.md §4.1`](API_SETUP.md): Foursquare's `rating`/`price`/`stats` fields are **Premium-only
+even on the free tier** (verified live — `429`, "purchasing credits is required"), not available at
+any free-tier call volume. Given the project's "completely free" constraint, `foursquare_enrich`
+was scoped down to confirmed-free fields only. The real free rating source turned out to be
+**Booking.com's existing response payload** (`reviewScore`, `reviewCount`, a photo URL — already
+being fetched for pricing, no extra call) for hotels, and `wikidata_enrich`'s Wikipedia
+`langlinkscount` for everything else. Both wired in; `rate()`'s design in
+[`DETERMINISM_AND_VALIDATION.md §6.2`](DETERMINISM_AND_VALIDATION.md) already degrades correctly
+for the categories with no rating source, so no formula change was needed — only the doc's
+assumption about where ratings would come from.
 
 ### Phase 3 — Kill the mocks · 1 d
 1. Rewrite `db_tool.py` against the new schema: `search_listings(district_id, category, tags, bbox, limit)`, `search_events(district_id, date_from, date_to)`, `get_user_profile`. Returns `[]` + a typed `DataUnavailable` error; **no fallbacks**.

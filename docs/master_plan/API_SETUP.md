@@ -23,7 +23,7 @@ Limits verified 2026-09-02. Providers change these; re-run the checker if someth
 | 10 | **OpenRouteService** | 🟢 recommended | no | 2,500/day · 40,000/month | `ORS_API_KEY` | Distances fall back to haversine ×1.35 |
 | 11 | **Groq** | 🟢 recommended | no | 30 RPM · 1,000 RPD · 8K TPM | `GROQ_API_KEY` | No LLM failover when Gemini hits quota |
 | 12 | **Foursquare Places** | 🟢 optional | no² | **500 Pro calls/month** | `FOURSQUARE_API_KEY` | Ratings sparse → `rating_score` ≈ neutral prior |
-| 13 | **Booking.com (RapidAPI)** | 🟢 optional | no² | varies by plan | `BOOKING_RAPIDAPI_KEY` | Hotel prices come from `cost_reference` instead of real prices |
+| 13 | **Booking.com (RapidAPI)** | 🟢 optional | no² | varies by plan | `BOOKING_RAPIDAPI_KEY` | Hotel prices come from `cost_reference` instead of real prices — ✅ configured & verified live 2026-09-02 |
 | 14 | **Ticketmaster** | ⚪ low value | no | 5,000/day | `TICKETMASTER_API_KEY` | Events — but coverage for Sri Lanka is ~zero anyway |
 | — | ~~Yelp Fusion~~ | ❌ dropped | | | | No Sri Lanka coverage |
 | — | ~~Eventbrite~~ | ❌ dropped | | | | Public event search API discontinued 2019 |
@@ -32,10 +32,13 @@ Limits verified 2026-09-02. Providers change these; re-run the checker if someth
 ¹ Stay on the **free plan** endpoints `/data/2.5/weather` and `/data/2.5/forecast` — which is what `weather_tool.py` already calls. **One Call API 3.0 requires a card; do not switch to it.**
 ² No card to *start*; a card is only needed if you exceed the free allowance.
 
-**Status — verified 2026-09-02 by `scripts/check_apis.py`:** all **7 required services green**.
-Gemini confirms `gemini-3.5-flash-lite` is callable on your key (38 models available); PostGIS 3.4
-on PostgreSQL 16.4; Redis 7.4.11; OpenWeather live; Overpass, Nominatim and all three disaster feeds
-reachable. Optional: 10–14 still unset.
+**Status — verified 2026-09-02 by `scripts/check_apis.py`: ALL 14 services green, Phase 0a fully
+complete.** All 7 required + all 7 optional/low-value. Gemini confirms `gemini-3.5-flash-lite`
+callable (38 models available); PostGIS 3.4 on PostgreSQL 16.4; Redis 7.4.11; OpenWeather live;
+Overpass, Nominatim, all three disaster feeds reachable; Calendar OAuth round-tripped live with a
+real refresh token (a genuine PKCE bug was found and fixed along the way — see
+`app/api/google_oauth.py`'s comments); ORS returns real road times; Groq and Foursquare respond;
+Booking.com and Ticketmaster both valid.
 
 Three things were fixed to get there — worth knowing, because each would have cost an afternoon later:
 
@@ -246,7 +249,32 @@ makes it a poor primary — one recommendation call is 4–6K tokens — but a p
 
 ## 4. Optional — and one design change you should know about
 
-### 4.1 Foursquare — now 500 calls/month, so we use it lazily
+### 4.1 Foursquare — rating/price are Premium-only, even on the free tier ⚠️ corrected 2026-09-02
+
+**Verified live against a real key and a real subscribed org:** `rating`, `price`, and `stats` all
+return `429` — *"Your account has no API credits remaining... Purchasing credits is required if
+you are trying to make Premium calls"* — while `tel`/`website`/basic fields return `200` on the
+identical request. This isn't a quota issue; it's a **hard tier gate**. The free "Pro" allowance
+never included ratings at all, contradicting the plan's original framing below.
+
+**Given the project's "completely free" constraint, `foursquare_enrich` does not request
+rating/price/stats.** An unattended nightly connector must never be one config change away from a
+paid call. What it still legitimately adds for free: confirming a listing's category/address
+against a second source, and `tel`/`website` contact fields for display. Real value, just smaller
+than originally planned.
+
+**The actual free rating source turned out to be Booking.com, already flowing through
+`booking_prices.py` at no extra cost** — its hotel search response carries `reviewScore` (0–10),
+`reviewCount`, and a real photo URL in the *same* payload already being fetched for pricing. No
+second call, no new key. `booking_prices.py` now converts and writes `rating`/`rating_count`/
+`listing_image` alongside price. Verified live: 13 Kandy hotels landed with ratings from 4.4–5.0 and
+review counts from 4–147.
+
+That covers **hotels**. Restaurants and attractions still have no free rating source — for those,
+`wikidata_enrich`'s `langlinkscount` (§ below) is the real, primary popularity substitute, not a
+secondary nice-to-have as originally framed.
+
+*Original plan text, kept for context on what changed:*
 
 Foursquare cut the free allowance to **500 Pro calls/month** from June 2026. Bulk-enriching ~3,000
 listings across 25 districts would need six years of allowance, so the weekly-bulk plan in
@@ -273,42 +301,27 @@ and covers every major attraction in the country.
 `rate` field on a free key. I haven't confirmed its 2026 status or Sri Lanka coverage — treat as a
 lead, not a recommendation.)*
 
-### 4.2 Booking.com via RapidAPI — real hotel prices ⚠️ provider changed
+### 4.2 Booking.com via RapidAPI — real hotel prices ✅ configured & verified live 2026-09-02
 
-`overpass_ingest.py` targets `booking-com15.p.rapidapi.com`, which **no longer exists on RapidAPI**
-(checked 2026-09-02). What's there now is a field of forks of the same upstream, with the same data
-but not guaranteed the same endpoint paths.
-
-**Pick by description lineage, not by name.** Several listings carry the *verbatim* booking-com15
-description — *"search for real-time hotel, flight, rental car, and taxi prices, as well as
-attractions"* — which is the strongest signal they're forks of the same API and therefore likely to
-keep `/api/v1/hotels/searchDestination` and `/api/v1/hotels/searchHotels`:
+**Correction to an earlier note in this file:** it previously said `booking-com15.p.rapidapi.com`
+"no longer exists on RapidAPI" based on it not surfacing in a marketplace search. That was wrong —
+`scripts/check_apis.py` now confirms it live: `booking-com15.p.rapidapi.com: 4 Sri Lanka match(es)
+for 'Kandy'`. The original host and endpoints (`/api/v1/hotels/searchDestination`,
+`/api/v1/hotels/searchHotels`) work exactly as `overpass_ingest.py` already expects — **no
+connector changes needed.** If it ever does 404/401 for you, the description-lineage forks below are
+still a reasonable fallback path, kept for that case:
 
 | Candidate | Stats | Note |
 |---|---|---|
-| **Booking COM** by *DataCrawler* | 9.9 · 100% · 3.4 s | Verbatim booking-com15 description. **Try first.** |
-| Booking COM by *Things4u* | 9.9 · 100% · 2.5 s | Same description lineage. Fallback. |
+| **Booking COM** by *DataCrawler* | 9.9 · 100% · 3.4 s | Verbatim booking-com15 description. |
+| Booking COM by *Things4u* | 9.9 · 100% · 2.5 s | Same description lineage. |
 | Booking com by *Tipsters CO* | 9.9 · 100% · 0.74 s | Fastest, freshest, but a different description — endpoint shape may differ. |
-| Booking COM – cheaper version by *Api-city* | 2.1 · **16%** | Same lineage, but 16% success rate. Avoid. |
+| ~~Booking COM – cheaper version by *Api-city*~~ | 2.1 · 16% | Avoid — low success rate. |
 
-**Steps:**
-1. [rapidapi.com](https://rapidapi.com) → sign up → open **Booking COM** by DataCrawler.
-2. **Pricing** tab → subscribe to **Basic (free)**.
-3. **Endpoints** tab → confirm a **destination search** and a **hotel search** endpoint exist. Copy
-   the `X-RapidAPI-Host` value from the code sample.
-4. `BOOKING_RAPIDAPI_KEY=…` and `BOOKING_RAPIDAPI_HOST=<the host from step 3>`.
-5. `python scripts/check_apis.py` — the probe reports precisely which failure you hit:
-   `401/403` = not subscribed · `404` = wrong endpoint path (report it and the connector adapts) ·
-   `429` = quota spent.
-
-**Timebox this to ~10 minutes.** If the endpoint shape doesn't match, defer it — `cost_reference`
-covers hotels with `basis: "reference"`, and revisiting during Phase 2 (when the connector is being
-rewritten anyway) is cheaper than fighting it now. It remains the highest-value optional key
-*if* it works cleanly, because hotels are ~40% of the budget and that's where estimate error
-concentrates.
-
-**Avoid** anything rated below ~9.0 or under ~95% uptime in that list — several are stale scrapers,
-and one explicitly says it no longer works on RapidAPI.
+If switching: subscribe on the **Pricing** tab (free plan), confirm the endpoint paths on
+**Endpoints**, then set `BOOKING_RAPIDAPI_HOST` to that provider's host.
+`python scripts/check_apis.py` reports precisely which failure you'd hit: `401/403` not subscribed ·
+`404` wrong endpoint path · `429` quota spent.
 
 ### 4.3 Ticketmaster — low value, ~2 minutes
 [developer.ticketmaster.com](https://developer.ticketmaster.com), free, 5,000/day. This repo's own
