@@ -42,7 +42,8 @@ from app.api.trip import router as trip_router
 from app.api.google_oauth import router as google_oauth_router
 from app.rag.rag_service import rag_service
 from app.scheduler import start_scheduler, stop_scheduler
-from app.data import events_ingest, overpass_ingest
+from app.utils.db_pool import close_pool
+from app.data import pipeline
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -104,25 +105,42 @@ async def index_rag_data(request: IndexDataRequest):
         raise HTTPException(status_code=500, detail=f"Indexing error: {str(e)}")
 
 
+def _run_pipeline_in_background(source: str) -> None:
+    """Dispatches the WHOLE pipeline run to a worker thread via
+    pipeline.run_sync(), not asyncio.create_task(pipeline.run(...)).
+
+    Every connector's actual I/O (requests, psycopg2) is synchronous by
+    design (app/data/postgres_writer.py's documented convention for batch
+    scripts) - scheduling run() as a bare asyncio.Task was tried first and
+    reproduced live: it froze the entire FastAPI server for the sync's full
+    multi-minute duration, since the coroutine only truly yields at its few
+    internal to_thread() points and blocks the event loop everywhere else.
+    run_in_executor keeps this endpoint's "started" response fast and every
+    other endpoint responsive while the sync runs - the same pattern the
+    original code used (run_in_executor(None, events_ingest.run_ingestion)),
+    just retargeted at the new pipeline.run_sync()."""
+    asyncio.get_running_loop().run_in_executor(None, pipeline.run_sync, source)
+
+
 @app.post("/api/admin/sync/events")
 async def trigger_events_sync():
     """
-    Manually trigger the weekly events sync (Ticketmaster, all districts).
-    Runs in a background thread and returns immediately - the sync itself takes
+    Manually trigger the Ticketmaster events sync (all districts).
+    Runs in the background and returns immediately - the sync itself takes
     several minutes across 25 districts; check server logs for completion.
     """
-    asyncio.get_running_loop().run_in_executor(None, events_ingest.run_ingestion)
+    _run_pipeline_in_background("ticketmaster_events")
     return {"status": "started", "message": "Events sync started in the background."}
 
 
 @app.post("/api/admin/sync/listings")
 async def trigger_listings_sync():
     """
-    Manually trigger the monthly hotels/restaurants/attractions + price sync (all districts).
-    Runs in a background thread and returns immediately - the sync itself takes
+    Manually trigger the OSM hotels/restaurants/attractions sync (all districts).
+    Runs in the background and returns immediately - the sync itself takes
     several minutes across 25 districts; check server logs for completion.
     """
-    asyncio.get_running_loop().run_in_executor(None, overpass_ingest.run_ingestion)
+    _run_pipeline_in_background("osm_listings")
     return {"status": "started", "message": "Listings sync started in the background."}
 
 
@@ -136,8 +154,9 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Stop the background scheduler cleanly."""
+    """Stop the background scheduler and release the DB pool cleanly."""
     stop_scheduler()
+    await close_pool()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SmartJourney AI Backend — Demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- Leaflet (free, no API key) - OpenStreetMap tiles -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #f4f5f7;
+    color: #1a1a1a;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 12px 20px;
+    background: #1f2937;
+    color: white;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header input[type=text] {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    width: 220px;
+  }
+  header label { font-size: 12px; opacity: 0.8; }
+
+  main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+  #left {
+    width: 40%;
+    min-width: 320px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #ddd;
+    background: white;
+  }
+  #chat-log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+  .msg {
+    max-width: 90%;
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    white-space: pre-wrap;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .msg.user {
+    background: #2563eb;
+    color: white;
+    margin-left: auto;
+  }
+  .msg.assistant {
+    background: #f0f1f3;
+    color: #1a1a1a;
+  }
+  .msg.error {
+    background: #fee2e2;
+    color: #991b1b;
+  }
+  #itinerary {
+    border-top: 1px solid #ddd;
+    padding: 12px 16px;
+    max-height: 40%;
+    overflow-y: auto;
+    font-size: 13px;
+  }
+  #itinerary h3 { margin: 0 0 8px 0; font-size: 13px; color: #555; }
+  .day-block { margin-bottom: 10px; }
+  .day-title { font-weight: 600; margin-bottom: 4px; }
+  .item-row { padding: 3px 0; border-bottom: 1px dashed #eee; }
+  .item-time { color: #2563eb; font-weight: 600; margin-right: 6px; }
+  .item-name { font-weight: 600; }
+  .item-notes { color: #666; display: block; font-size: 12px; }
+
+  #input-row {
+    display: flex;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid #ddd;
+  }
+  #input-row input {
+    flex: 1;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #ccc;
+    font-size: 14px;
+  }
+  #input-row button {
+    padding: 10px 18px;
+    border-radius: 8px;
+    border: none;
+    background: #2563eb;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  #input-row button:disabled { background: #9ca3af; cursor: default; }
+
+  #map { flex: 1; }
+
+  #statusBar {
+    padding: 4px 16px;
+    font-size: 11px;
+    color: #777;
+    background: #fafafa;
+    border-top: 1px solid #eee;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SmartJourney — Agent Demo</h1>
+  <label>API base URL:
+    <input type="text" id="apiBase" value="http://localhost:8001">
+  </label>
+</header>
+
+<main>
+  <div id="left">
+    <div id="chat-log"></div>
+    <div id="itinerary"><h3>Itinerary</h3><div id="itinerary-body">No trip planned yet.</div></div>
+    <div id="input-row">
+      <input type="text" id="userInput" placeholder="e.g. Plan a 3-day trip to Kandy, budget $300, love hiking"
+             autocomplete="off">
+      <button id="sendBtn">Send</button>
+    </div>
+    <div id="statusBar">No session yet.</div>
+  </div>
+  <div id="map"></div>
+</main>
+
+<script>
+let sessionId = null;
+let map = null;
+let markersLayer = null;
+let routeLayer = null;
+
+function initMap() {
+  map = L.map('map').setView([7.8731, 80.7718], 8); // Sri Lanka
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 18,
+  }).addTo(map);
+  markersLayer = L.layerGroup().addTo(map);
+}
+
+function addMessage(text, cls) {
+  const log = document.getElementById('chat-log');
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function renderItinerary(itinerary) {
+  const body = document.getElementById('itinerary-body');
+  if (!itinerary || itinerary.length === 0) {
+    body.textContent = 'No itinerary in this response.';
+    return;
+  }
+  body.innerHTML = '';
+  itinerary.forEach(day => {
+    const dayDiv = document.createElement('div');
+    dayDiv.className = 'day-block';
+    const title = document.createElement('div');
+    title.className = 'day-title';
+    title.textContent = 'Day ' + day.day + (day.date ? ' — ' + day.date : '');
+    dayDiv.appendChild(title);
+    (day.items || []).forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'item-row';
+      row.innerHTML =
+        '<span class="item-time">' + (item.time || '') + '</span>' +
+        '<span class="item-name">' + (item.name || '') + '</span>' +
+        (item.notes ? '<span class="item-notes">' + item.notes + '</span>' : '');
+      dayDiv.appendChild(row);
+    });
+    body.appendChild(dayDiv);
+  });
+}
+
+function renderMap(itinerary) {
+  markersLayer.clearLayers();
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  if (!itinerary || itinerary.length === 0) return;
+
+  const points = [];
+  let stopNumber = 1;
+  itinerary.forEach(day => {
+    (day.items || []).forEach(item => {
+      if (typeof item.lat === 'number' && typeof item.lon === 'number') {
+        const marker = L.marker([item.lat, item.lon]).bindPopup(
+          '<b>' + stopNumber + '. ' + (item.name || 'Stop') + '</b><br>' +
+          (item.time || '') + '<br>' + (item.notes || '')
+        );
+        marker.addTo(markersLayer);
+        points.push([item.lat, item.lon]);
+        stopNumber++;
+      }
+    });
+  });
+
+  if (points.length > 0) {
+    routeLayer = L.polyline(points, { color: '#2563eb', weight: 3, dashArray: '6 6' }).addTo(map);
+    map.fitBounds(L.latLngBounds(points), { padding: [30, 30] });
+  }
+}
+
+async function sendMessage() {
+  const input = document.getElementById('userInput');
+  const text = input.value.trim();
+  if (!text) return;
+
+  const apiBase = document.getElementById('apiBase').value.replace(/\/$/, '');
+  const sendBtn = document.getElementById('sendBtn');
+
+  addMessage(text, 'user');
+  input.value = '';
+  sendBtn.disabled = true;
+  document.getElementById('statusBar').textContent = 'Thinking...';
+
+  try {
+    const resp = await fetch(apiBase + '/trip-plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, session_id: sessionId }),
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      addMessage('Request failed: ' + JSON.stringify(data), 'error');
+      return;
+    }
+
+    sessionId = data.session_id;
+    addMessage(data.final_response || '(no response text)', 'assistant');
+    renderItinerary(data.itinerary);
+    renderMap(data.itinerary);
+
+    document.getElementById('statusBar').textContent =
+      'session_id: ' + sessionId +
+      (data.estimated_cost != null ? ' | estimated cost: ' + data.estimated_cost + ' ' + (data.currency || 'LKR') : '') +
+      (data.plan_source ? ' | plan_source: ' + data.plan_source : '') +
+      (data.errors && data.errors.length ? ' | errors: ' + data.errors.join('; ') : '');
+  } catch (err) {
+    addMessage('Could not reach the API at ' + apiBase + ' — is the server running? (' + err + ')', 'error');
+  } finally {
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+document.getElementById('sendBtn').addEventListener('click', sendMessage);
+document.getElementById('userInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') sendMessage();
+});
+
+initMap();
+addMessage('Type a trip request below (e.g. "Plan a 3-day trip to Kandy, budget $300, love hiking"). ' +
+  'Send a follow-up message afterwards to modify the same plan.', 'assistant');
+</script>
+
+</body>
+</html>

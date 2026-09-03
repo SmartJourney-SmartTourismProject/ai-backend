@@ -34,6 +34,7 @@ jsonpointer==3.1.1
 langchain==1.3.14
 langchain-core==1.5.3
 langchain-google-genai==4.3.2
+langchain-groq==1.1.3    # LLM failover provider (decision D6b) - free tier, no card
 langchain-protocol==0.0.18
 langgraph==1.2.10
 langgraph-checkpoint==4.1.1
@@ -81,13 +82,19 @@ pydantic-settings
 beautifulsoup4==4.13.4
 google-auth-oauthlib==1.4.0
 
-# --- Member B's data/RAG/scheduler track (missing from the list above) ---
-# All four are imported behind try/except fallbacks in their respective
-# modules, so the app still runs without them (mock data / no-op cache /
-# unfiltered candidate lists) - but real Supabase, vector search, and the
-# automated data-refresh schedule need these installed.
+# --- Data / RAG / scheduler track ---
+# All are imported behind try/except fallbacks in their respective modules, so
+# the app still runs without them (mock data / no-op cache / unfiltered
+# candidate lists) - but the real database, vector search, and the automated
+# data-refresh schedule need these installed.
+#
+# asyncpg  -> async DB access in the request path (db_tool, calendar_tool)
+# psycopg2 -> sync DB access for the batch ingest scripts, which run outside
+#             the event loop via APScheduler (already pinned further up).
 apscheduler==3.11.3
-supabase
-faiss-cpu
-sentence-transformers
+asyncpg
 redis
+
+# faiss-cpu and sentence-transformers moved to requirements-rag.txt -
+# RAG is demoted and off by default (decision D11, PROJECT_MASTER_PLAN.md).
+# pip install -r requirements-rag.txt only if you set ENABLE_RAG=true.

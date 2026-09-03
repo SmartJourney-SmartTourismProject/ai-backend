@@ -1,27 +1,50 @@
 # app/tools/calendar_tool.py
 import json
+import logging
 from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
+from typing import Optional
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
 from app.config.settings import settings
+from app.utils.db_pool import get_pool
+
+logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.freebusy"]
 
 
 # --- Credential storage -------------------------------------------------
-# TODO(Member B): move this to a real DB table (google_oauth_tokens) once
-# Supabase is wired in - see handoff note in member_B.md. Until then, a
-# local JSON file so tokens survive an app restart instead of resetting
-# every time like the previous in-memory dict did. Not safe for multiple
-# server instances (no locking, no shared storage) - fine for local dev.
+# Real persistence: the `google_oauth_tokens` table (user_id, access_token,
+# refresh_token, token_expiry, scope). This table is the AI backend's alone
+# to write - see backend/docs/BACKEND_PLAN.md §2.
+# Falls back to a local JSON file when DATABASE_URL isn't configured (e.g. a
+# fresh clone with no .env yet), so this still works without a database - it
+# just won't survive across multiple server instances or, if the database
+# itself is down, past this process's restart.
 _CREDENTIAL_STORE_PATH = Path(__file__).resolve().parent.parent.parent / "calendar_tokens.json"
 
 
-def _load_store() -> dict:
+def _coerce_expiry(value) -> Optional[datetime]:
+    """
+    google_oauth.py stores token_expiry as an ISO string, but the column is
+    timestamptz and asyncpg won't coerce a string for us (the Supabase REST
+    layer used to). Accept either and hand asyncpg a real datetime.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        logger.warning(f"Unparseable token_expiry {value!r}; storing NULL.")
+        return None
+
+
+
+def _load_local_store() -> dict:
     if not _CREDENTIAL_STORE_PATH.exists():
         return {}
     try:
@@ -30,18 +53,72 @@ def _load_store() -> dict:
         return {}
 
 
-def _save_store(store: dict) -> None:
+def _save_local_store(store: dict) -> None:
     _CREDENTIAL_STORE_PATH.write_text(json.dumps(store, indent=2))
 
 
+_SELECT_TOKENS = """
+    SELECT access_token, refresh_token, token_expiry, scope
+    FROM google_oauth_tokens
+    WHERE user_id = $1
+"""
+
+_UPSERT_TOKENS = """
+    INSERT INTO google_oauth_tokens
+        (user_id, access_token, refresh_token, token_expiry, scope)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (user_id) DO UPDATE SET
+        access_token  = EXCLUDED.access_token,
+        refresh_token = EXCLUDED.refresh_token,
+        token_expiry  = EXCLUDED.token_expiry,
+        scope         = EXCLUDED.scope,
+        updated_at    = now()
+"""
+
+
 async def get_stored_credentials(user_id: str) -> dict | None:
-    return _load_store().get(user_id)
+    try:
+        pool = await get_pool()
+        if pool:
+            row = await pool.fetchrow(_SELECT_TOKENS, user_id)
+            if row:
+                return {
+                    "access_token": row["access_token"],
+                    "refresh_token": row["refresh_token"],
+                    "token_expiry": row["token_expiry"],
+                    "scope": row["scope"],
+                }
+            # Database reachable and authoritative: no row means this user
+            # genuinely hasn't connected a calendar (or revoked it). Do NOT
+            # fall through to the local file here - that could resurrect a
+            # token the user deliberately disconnected. The local store is a
+            # fallback for "no database", not for "database says no".
+            return None
+    except Exception as e:
+        logger.warning(f"Token lookup failed for user '{user_id}', trying local store: {e}")
+
+    return _load_local_store().get(user_id)
 
 
 async def save_credentials(user_id: str, creds: dict) -> None:
-    store = _load_store()
+    try:
+        pool = await get_pool()
+        if pool:
+            await pool.execute(
+                _UPSERT_TOKENS,
+                user_id,
+                creds.get("access_token"),
+                creds.get("refresh_token"),
+                _coerce_expiry(creds.get("token_expiry")),
+                creds.get("scope"),
+            )
+            return
+    except Exception as e:
+        logger.warning(f"Token save failed for user '{user_id}', falling back to local store: {e}")
+
+    store = _load_local_store()
     store[user_id] = creds
-    _save_store(store)
+    _save_local_store(store)
 # ------------------------------------------------------------------------
 
 
@@ -106,6 +183,8 @@ async def get_free_days(user_id: str, search_window_days: int = 30) -> list[dict
             await save_credentials(user_id, {
                 "access_token": google_creds.token,
                 "refresh_token": google_creds.refresh_token,
+                "token_expiry": google_creds.expiry.isoformat() if google_creds.expiry else None,
+                "scope": stored.get("scope"),
             })
 
         service = build("calendar", "v3", credentials=google_creds)

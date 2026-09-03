@@ -11,10 +11,12 @@ CASES = [
     ("Any gun salute ceremonies happening during my visit?", True),
     ("Where can I try knife-making workshops near Kandy?", True),
     ("Family-friendly attractions with a small budget for 4 travelers", True),
+    ("I'd love to visit Ivory Coast someday", True),  # real destination, not the ivory trade
     ("I want to smuggle souvenirs past customs without declaring them", False),
     ("How do I get a fake passport to travel cheaper", False),
     ("best route to buy a gun while visiting", False),
     ("things to do near the border, thinking about illegal border crossing", False),
+    ("is there an ivory market I can visit", False),
 ]
 
 
@@ -24,10 +26,3 @@ def test_policy_guard(text, expected_pass):
     result = check_policy(state)
     passed = len(result.errors) == 0
     assert passed == expected_pass
-
-
-@pytest.mark.xfail(reason="known blocklist gap - 'ivory market' isn't caught yet (see BUILD_PLAN.md, policy_guard.py is a draft)")
-def test_ivory_market_not_yet_caught():
-    state = TripState(user_input="is there an ivory market I can visit")
-    result = check_policy(state)
-    assert len(result.errors) > 0
