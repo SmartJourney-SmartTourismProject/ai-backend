@@ -166,6 +166,22 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
     }
 
     last_day_num = max((d["day"] for d in itinerary), default=1)
+
+    # Same cross-day variety fix as app/core/fallback.py's build_plan_core -
+    # seeded from whatever the UNTOUCHED days already show, so a rebuilt day
+    # doesn't duplicate something an untouched day is already using, and
+    # each rebuilt day excludes what an earlier rebuilt day just picked.
+    used_attraction_ids: set[str] = set()
+    used_restaurant_ids: set[str] = set()
+    for day in itinerary:
+        if day.get("day") in target_days:
+            continue
+        for it in day.get("items", []):
+            if it.get("type") == "attraction" and it.get("listing_id"):
+                used_attraction_ids.add(it["listing_id"])
+            elif it.get("type") == "restaurant" and it.get("listing_id"):
+                used_restaurant_ids.add(it["listing_id"])
+
     new_days = []
     for day in itinerary:
         day_num = day.get("day")
@@ -174,6 +190,8 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
             continue
 
         day_anchor = start_anchor if day_num == 1 else hotel_anchor
+        fresh_attractions = [a for a in ranked_attractions if a["id"] not in used_attraction_ids]
+        fresh_restaurants = [r for r in ranked_restaurants if r["id"] not in used_restaurant_ids]
         constraints = DayConstraints(
             items_target=_PACE_ITEMS.get(state.pace or "balanced", 3),
             outdoor_tags=frozenset(),
@@ -184,9 +202,16 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
             cost_lookup=all_cost_lookup,
         )
         selections = DaySelections(
-            hotels=ranked_hotels, restaurants=ranked_restaurants, attractions=ranked_attractions,
+            hotels=ranked_hotels,
+            restaurants=fresh_restaurants or ranked_restaurants,
+            attractions=fresh_attractions or ranked_attractions,
         )
         plan = build_day_plan(day_num, day.get("date", ""), day_anchor, selections, constraints, matrix)
+        for it in plan.items:
+            if it.type == "attraction" and it.listing_id:
+                used_attraction_ids.add(it.listing_id)
+            elif it.type == "restaurant" and it.listing_id:
+                used_restaurant_ids.add(it.listing_id)
         new_days.append({
             "day": plan.day, "date": plan.date,
             "items": [

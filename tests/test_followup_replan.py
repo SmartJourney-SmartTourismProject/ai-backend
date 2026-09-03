@@ -174,3 +174,38 @@ async def test_data_unavailable_degrades_to_full_replan(monkeypatch):
 
     assert state.followup_scope == "full"
     assert any("targeted_replan_failed" in e for e in state.errors)
+
+
+# ---- cross-day variety (same fix as app/core/fallback.py, found live) ------
+
+def _many_attractions(n: int, prefix="z"):
+    return [_attraction(f"{prefix}{i}", lat=7.30 + i * 0.001, lon=80.64 + i * 0.001) for i in range(n)]
+
+
+async def test_rebuilt_days_dont_repeat_attractions_across_each_other(monkeypatch):
+    _patch_search(monkeypatch, attractions=_many_attractions(20))
+    state = _base_state(followup_target_days=None)   # rebuild every day
+
+    await rebuild_targeted_days(state)
+
+    def attraction_ids(day):
+        return {i["listing_id"] for i in day["items"] if i["type"] == "attraction"}
+
+    day_ids = [attraction_ids(d) for d in state.itinerary]
+    assert day_ids[0], "day 1 should have real attractions to compare against"
+    assert day_ids[0].isdisjoint(day_ids[1])
+    assert day_ids[0].isdisjoint(day_ids[2])
+    assert day_ids[1].isdisjoint(day_ids[2])
+
+
+async def test_rebuilt_day_excludes_what_an_untouched_day_already_uses(monkeypatch):
+    # Day 3 is untouched and already uses "a2" (see _base_state) - rebuilding
+    # only day 2 must not pick "a2" again, even though it's a real, valid
+    # candidate the search would otherwise return.
+    _patch_search(monkeypatch, attractions=[_attraction("a1"), _attraction("a2")])
+    state = _base_state(followup_target_days=[2])
+
+    await rebuild_targeted_days(state)
+
+    day2_ids = {i["listing_id"] for i in state.itinerary[1]["items"] if i["type"] == "attraction"}
+    assert "a2" not in day2_ids   # day 3 (untouched) already has it

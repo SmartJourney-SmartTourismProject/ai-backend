@@ -131,12 +131,29 @@ def build_plan_core(
     day_costs_for_budget_check: list[dict] = []
     hotel_anchor = ranked_hotels[0] if ranked_hotels else anchor
 
+    # Attractions/restaurants used on an EARLIER day are excluded from later
+    # days' candidate lists - found live (2026-09-03, real demo run): with
+    # 40+ real attractions available for the district, every day was still
+    # showing the identical top-N attractions, because every day picked
+    # fresh from the SAME full ranked list with no memory of what earlier
+    # days already used. Hotels are deliberately NOT deduplicated this way -
+    # staying at the same hotel for the whole trip is correct, not a bug.
+    # A day that runs out of fresh candidates (a long trip, or a genuinely
+    # small real pool) falls back to the full ranked list rather than
+    # serving an emptier day - reuse is the correct degrade, not a crash.
+    used_attraction_ids: set[str] = set()
+    used_restaurant_ids: set[str] = set()
+
     for day_num in range(1, ctx.duration_days + 1):
         day_date = ctx.start_date + timedelta(days=day_num - 1)
         day_date_str = day_date.isoformat()
         rain_p = ctx.per_day_rain_probability.get(day_date_str, 0.0)
 
         day_anchor = anchor if day_num == 1 else hotel_anchor
+
+        fresh_attractions = [a for a in ranked_attractions if a["id"] not in used_attraction_ids]
+        fresh_restaurants = [r for r in ranked_restaurants if r["id"] not in used_restaurant_ids]
+
         constraints = DayConstraints(
             items_target=ctx.pace_items_per_day,
             exclude_outdoor=(rain_p >= RAIN_THRESHOLD),
@@ -149,9 +166,17 @@ def build_plan_core(
             cost_lookup=all_cost_lookup,
         )
         selections = DaySelections(
-            hotels=ranked_hotels, restaurants=ranked_restaurants, attractions=ranked_attractions,
+            hotels=ranked_hotels,
+            restaurants=fresh_restaurants or ranked_restaurants,
+            attractions=fresh_attractions or ranked_attractions,
         )
         plan = build_day_plan(day_num, day_date_str, day_anchor, selections, constraints, matrix)
+
+        for it in plan.items:
+            if it.type == "attraction" and it.listing_id:
+                used_attraction_ids.add(it.listing_id)
+            elif it.type == "restaurant" and it.listing_id:
+                used_restaurant_ids.add(it.listing_id)
 
         days.append({
             "day": plan.day, "date": plan.date,

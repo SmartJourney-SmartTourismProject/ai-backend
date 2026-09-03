@@ -169,3 +169,76 @@ def test_build_plan_no_candidates_produces_empty_but_valid_plan():
     assert len(result.itinerary) == 1
     assert result.itinerary[0]["items"] == []
     assert result.estimated_cost == 0.0
+
+
+# ---- cross-day variety (found live 2026-09-03, real demo run) --------------
+# With 40+ real candidates available, a 3-day Kandy itinerary was still
+# showing the identical top-N attractions/restaurants every single day -
+# every day picked fresh from the same full ranked list with no memory of
+# what earlier days already used.
+
+def _many_attractions(n: int) -> list[dict]:
+    return [
+        {"id": f"a{i}", "name": f"Attraction {i}", "lat": 7.29 + i * 0.001, "lon": 80.63 + i * 0.001,
+         "price_level": 1, "rating": 4.5 - i * 0.01, "rating_count": 100 - i, "tags": ["culture"], "currency": "LKR"}
+        for i in range(n)
+    ]
+
+
+def _many_restaurants(n: int) -> list[dict]:
+    return [
+        {"id": f"r{i}", "name": f"Restaurant {i}", "lat": 7.29 + i * 0.001, "lon": 80.63 + i * 0.001,
+         "price_level": 1, "rating": 4.5 - i * 0.01, "rating_count": 100 - i, "tags": ["food"], "currency": "LKR"}
+        for i in range(n)
+    ]
+
+
+def test_build_plan_different_days_get_different_attractions_when_enough_exist():
+    ctx = _ctx(duration_days=3)
+    result = _build(ctx, attractions=_many_attractions(20), restaurants=_many_restaurants(20))
+
+    def attraction_ids(day):
+        return {i["listing_id"] for i in day["items"] if i["type"] == "attraction"}
+
+    day1_ids, day2_ids, day3_ids = (attraction_ids(d) for d in result.itinerary)
+    assert day1_ids, "day 1 should have real attractions to compare against"
+    assert day1_ids.isdisjoint(day2_ids)
+    assert day1_ids.isdisjoint(day3_ids)
+    assert day2_ids.isdisjoint(day3_ids)
+
+
+def test_build_plan_reuses_the_same_hotel_across_days_not_deduplicated():
+    # The hotel is deliberately NOT subject to the same no-repeat rule -
+    # staying at one hotel for the whole trip is correct.
+    ctx = _ctx(duration_days=3)
+    result = _build(ctx, hotels=[HOTEL_MID, HOTEL_CHEAP])
+
+    hotel_ids_used = {
+        i["listing_id"] for day in result.itinerary for i in day["items"] if i["type"] == "hotel"
+    }
+    # Exactly one hotel, used for both check-in and check-out - whichever
+    # one the scorer ranked first, not deduplicated away across days.
+    assert len(hotel_ids_used) == 1
+    assert hotel_ids_used <= {"h1", "h2"}
+
+
+def test_build_plan_falls_back_to_reuse_when_candidates_run_out():
+    # Only 2 real attractions for a 3-day trip - days must still be built
+    # (reuse), never left empty just because fresh candidates ran out.
+    ctx = _ctx(duration_days=3)
+    result = _build(ctx, attractions=[ATTRACTION_CULTURE, ATTRACTION_OUTDOOR])
+
+    for day in result.itinerary:
+        attraction_items = [i for i in day["items"] if i["type"] == "attraction"]
+        assert attraction_items, f"day {day['day']} should still get an attraction via reuse"
+
+
+def test_build_plan_variety_is_still_deterministic():
+    ctx = _ctx(duration_days=3)
+    results = [
+        _build(ctx, attractions=_many_attractions(20), restaurants=_many_restaurants(20))
+        for _ in range(5)
+    ]
+    first = results[0]
+    for r in results[1:]:
+        assert r.itinerary == first.itinerary

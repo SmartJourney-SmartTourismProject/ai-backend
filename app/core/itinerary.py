@@ -186,12 +186,25 @@ def build_day_plan(
 
     # 3. Route: nearest-neighbour from the current anchor through
     #    attractions/restaurant, minimizing backtracking.
-    stops: list[tuple[dict, str]] = [(a, "attraction") for a in accepted_attractions]
 
     # 4. Meal slots - lunch/dinner inserted from the ranked restaurant list,
     #    nearest to wherever the route is passing through.
+    #
+    #    used_restaurant_ids tracks EVERY restaurant actually placed so far
+    #    today (updated as each one is picked, not just fixed at attraction-
+    #    list-creation time) - found live (2026-09-03, real demo run): dinner's
+    #    exclusion set only ever checked against `stops` (attractions),
+    #    which lunch's pick was never added to, so the same restaurant could
+    #    be - and was - selected for both lunch and dinner on the same day.
+    used_restaurant_ids: set[str] = set()
+
     def nearest_restaurant(near: dict) -> Optional[dict]:
-        candidates = [r for r in selections.restaurants if r["id"] not in {s[0]["id"] for s in stops}]
+        # Prefer a restaurant not already used today; if none is left
+        # (a genuinely small real candidate pool), reuse is still better
+        # than leaving a meal slot empty - same "degrade, don't omit"
+        # philosophy as everywhere else in this module.
+        fresh = [r for r in selections.restaurants if r["id"] not in used_restaurant_ids]
+        candidates = fresh or selections.restaurants
         return min(candidates, key=lambda r: haversine_km(near, r)) if candidates else None
 
     ordered_attractions = _nearest_neighbor_order(current_point, accepted_attractions)
@@ -203,12 +216,14 @@ def build_day_plan(
             lunch = nearest_restaurant(a)
             if lunch:
                 route.append((lunch, "restaurant"))
+                used_restaurant_ids.add(lunch["id"])
 
     if constraints.include_dinner and selections.restaurants:
         dinner_anchor = route[-1][0] if route else current_point
         dinner = nearest_restaurant(dinner_anchor)
         if dinner:
             route.append((dinner, "restaurant"))
+            used_restaurant_ids.add(dinner["id"])
 
     for item_dict, item_type in route:
         current_point = emit(item_dict, item_type, current_point)

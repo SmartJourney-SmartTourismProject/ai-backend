@@ -149,3 +149,29 @@ def test_build_day_plan_is_deterministic_across_runs():
         assert [i.__dict__ for i in r.items] == [i.__dict__ for i in first.items]
         assert r.day_cost == first.day_cost
         assert r.total_km == first.total_km
+
+
+# ---- lunch/dinner don't pick the same restaurant twice (found live 2026-09-03) --
+
+RESTAURANT_2 = {"id": "r2", "name": "Second Restaurant", "lat": 7.2925, "lon": 80.6355, "currency": "LKR"}
+
+
+def test_build_day_plan_lunch_and_dinner_are_different_restaurants_when_two_exist():
+    constraints = DayConstraints(items_target=2, include_lunch=True, include_dinner=True)
+    selections = _selections(restaurants=[RESTAURANT, RESTAURANT_2])
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, selections, constraints)
+
+    restaurant_ids = [i.listing_id for i in plan.items if i.type == "restaurant"]
+    assert len(restaurant_ids) == 2
+    assert len(set(restaurant_ids)) == 2   # not the same restaurant twice
+
+
+def test_build_day_plan_reuses_the_only_restaurant_rather_than_skip_a_meal():
+    # Only one real restaurant candidate - dinner reusing it is better than
+    # silently dropping the meal slot.
+    constraints = DayConstraints(items_target=2, include_lunch=True, include_dinner=True)
+    selections = _selections(restaurants=[RESTAURANT])
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, selections, constraints)
+
+    restaurant_ids = [i.listing_id for i in plan.items if i.type == "restaurant"]
+    assert restaurant_ids == ["r1", "r1"]
