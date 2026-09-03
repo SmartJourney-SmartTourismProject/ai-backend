@@ -631,8 +631,38 @@ few targeted re-checks where a 429 made a result ambiguous (documented per-scena
 (both before and after the get_llm fix - the fix was verified against a direct reproduction, not just
 inferred from the golden run). Scenario 5 is the one genuine failure — see the table.
 
-### Phase 9 — NestJS alignment · not on this critical path
+### Phase 9 — NestJS alignment · not on this critical path · ✅ scaffolding + schema pull done 2026-09-03
 Per [`BACKEND_ALIGNMENT.md`](../../../backend/docs/BACKEND_ALIGNMENT.md). Start after Phase 3; `prisma db pull` against the live schema.
+
+**What's done:** `backend/` scaffolded with `nest new` (NestJS 12, TypeScript, npm). Prisma 7.10.0
+(pinned to the latest **stable** release, not the `8.0.0-rc.12` that `@latest` resolved to at the
+time) installed with `@prisma/client` at the matching version. `prisma init` + `schema.prisma` edited
+per `BACKEND_PLAN.md §4.2` (`previewFeatures = ["postgresqlExtensions"]`, `extensions = [postgis]`).
+`npx prisma db pull` against the real live database introspected **27 models** cleanly — every table
+both `0001_core.sql` and `0002_identity_planning.sql` created, confirming decision D13's "Prisma
+introspects, doesn't own" arrangement actually works end to end, not just on paper. The
+`Unsupported("geography"/"geometry")` warnings on `location`/`center`/`boundary` are exactly what
+§4.2 anticipated; `travel_listing.latitude`/`longitude` came through as ordinary, readable `Float?`
+fields via the generated `STORED` columns, confirming that specific design decision against the real
+schema.
+
+**One real friction point, not anticipated in the docs:** Prisma 7 requires an explicit driver
+adapter (`@prisma/adapter-pg` + `pg`) — constructing `PrismaClient` with no arguments throws
+`PrismaClientInitializationError` at runtime (this postdates `BACKEND_PLAN.md §4.2`, written against
+an older Prisma). Wired into `src/prisma/prisma.service.ts` (a `@Global` `PrismaModule` +
+`PrismaService extends PrismaClient`, connects `DATABASE_URL` via `PrismaPg`) — every future feature
+module injects `PrismaService`, never constructs `PrismaClient` directly.
+
+**Live-verified, not just "builds":** `npm run build` succeeds; `node dist/main.js` starts cleanly and
+logs `PrismaService: Connected to Postgres via Prisma.`; a direct query script (before being wired
+into the app) returned real counts matching the AI backend's own data — **25 districts, 6,572
+listings**, and the exact same Kandy district UUID (`dbd36da4-...`) seen throughout this session's AI
+backend testing. Same database, same data, both sides now reading it correctly.
+
+**What's NOT done, deliberately — this is `BACKEND_PLAN.md`'s own much larger scope, not this phase's:**
+seeding, auth (Phase 2), explore endpoints (Phase 3), the chat/trip-plan proxy (Phase 4), budget
+tracker (Phase 6), admin panel (Phase 7). Per `PROJECT_MASTER_PLAN.md`'s own framing, Phase 9 here is
+the alignment/unblock step, not a commitment to build the whole NestJS app in this pass.
 
 ---
 
