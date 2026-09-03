@@ -74,7 +74,11 @@ class _FakeLLM:
     def bind_tools(self, tools):
         return self._bound
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, **kwargs):
+        # Real with_structured_output() accepts a `method` kwarg
+        # (app/core/react.py passes method="json_schema") - recorded here
+        # so a test can assert on it, per-call args otherwise ignored.
+        self.last_with_structured_output_kwargs = kwargs
         return self._structured
 
     async def ainvoke(self, messages):
@@ -377,6 +381,23 @@ async def test_finalization_never_replays_raw_tool_call_transcript():
     assert not any(isinstance(m, AIMessage) for m in sent_messages)
     assert not any(isinstance(m, ToolMessage) for m in sent_messages)
     assert isinstance(sent_messages[-1], HumanMessage)
+
+
+async def test_finalization_forces_json_schema_structured_output_mode():
+    # Regression: found live 2026-09-03 - Groq's DEFAULT
+    # with_structured_output() mode ("function_calling") wraps the answer
+    # in a synthetic tool call the API then rejects ("attempted to call
+    # tool 'json' which was not in request.tools"), even though the
+    # model's own generated content was already correct every time this
+    # was inspected. Forcing method="json_schema" (Groq's native
+    # structured-output path, and already Gemini's own default, so a
+    # no-op there) is what actually fixed it.
+    final_msg = AIMessage(content="", tool_calls=[])
+    llm = _FakeLLM(turns=[final_msg], final_answer=_Answer(value="done"))
+
+    await run_react(llm, tools=[], messages=[SystemMessage(content="sys")], output_schema=_Answer)
+
+    assert llm.last_with_structured_output_kwargs == {"method": "json_schema"}
 
 
 async def test_finalize_system_replaces_the_loops_own_system_prompt_when_given():

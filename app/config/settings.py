@@ -38,6 +38,18 @@ class Settings(BaseSettings):
     llm_model_orchestrator: str = ""
     groq_api_key: str = ""
 
+    # Purposes to try in Groq-first order (app/core/llm.py's get_llm()) -
+    # RecommendationOutput/PlannerOutput's schema was live-confirmed
+    # 2026-09-03 to reliably fail against BOTH configured Gemini models
+    # with a bare, non-quota 400 (reproduced across two different Gemini
+    # accounts/keys, ruling out a key/quota explanation) - Groq succeeds a
+    # real fraction of the time on the same payload, so trying it FIRST for
+    # these two purposes avoids burning two guaranteed-failed Gemini calls
+    # (and real Gemini quota) before ever reaching the provider that
+    # actually has a chance. orchestrator's simpler TripContext schema
+    # works fine with Gemini and is deliberately excluded.
+    llm_provider_chain_groq_first_purposes: str = "recommend,plan"
+
     # Response narration (LLM #5) is off by default - the template is free
     # and deterministic (decision D6c). Turn on only if the generated prose
     # is worth the extra call against the daily quota.

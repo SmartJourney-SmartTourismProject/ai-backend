@@ -89,6 +89,10 @@ def _build(spec: str, purpose: Purpose) -> BaseChatModel:
     raise ValueError(f"unknown LLM provider in chain: '{provider}' (from spec '{spec}')")
 
 
+def _groq_first_purposes() -> set[str]:
+    return {p.strip() for p in settings.llm_provider_chain_groq_first_purposes.split(",") if p.strip()}
+
+
 @lru_cache(maxsize=16)
 def get_llm(purpose: Purpose) -> BaseChatModel:
     """Returns the primary model for `purpose` with the rest of the
@@ -98,6 +102,25 @@ def get_llm(purpose: Purpose) -> BaseChatModel:
 
     if purpose == "orchestrator" and settings.llm_model_orchestrator:
         specs = [f"gemini:{settings.llm_model_orchestrator}", *specs]
+
+    if purpose in _groq_first_purposes():
+        # RecommendationOutput/PlannerOutput's schema (nested lists of
+        # pattern-constrained objects) was live-confirmed 2026-09-03 to
+        # reliably fail against BOTH configured Gemini models with a bare,
+        # non-quota 400 INVALID_ARGUMENT - reproduced with fresh quota, not
+        # a rate limit or a one-off. Groq succeeds reliably on the same
+        # payload once its own token-budget issue was fixed
+        # (react.py's finalize_system + tighter observation trimming).
+        # Trying Gemini first here just burns two guaranteed-failed calls
+        # (and real Gemini quota) before ever reaching the provider that
+        # actually works for this job - this reorder is evidence-based, not
+        # a guess, and deliberately scoped to only the two purposes that
+        # showed this failure (orchestrator's simpler TripContext schema
+        # works fine with Gemini - see AGENT_ARCHITECTURE.md's own live
+        # verification - so it keeps Gemini first).
+        groq_specs = [s for s in specs if s.startswith("groq:")]
+        other_specs = [s for s in specs if not s.startswith("groq:")]
+        specs = [*groq_specs, *other_specs]
 
     usable = [s for s in specs if _has_key_for(s)]
     if not usable:

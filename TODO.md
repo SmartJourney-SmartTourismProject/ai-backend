@@ -123,11 +123,47 @@ the gap it targeted. Further clean re-runs to confirm `plan_source: "llm"` consi
 separate, unavoidable rate limit — not a code issue, and not something more fixes will change; it
 just needs fresh quota, e.g. a different hour/day).
 
+**Update (2026-09-03, third pass) — Gemini's 400 confirmed key-independent; two more real fixes:**
+
+The user swapped in a completely different Gemini account's API key mid-session specifically to rule
+out "bad/exhausted key" as the explanation. **Result: identical.** `gemini-3.5-flash-lite` and
+`gemini-3.6-flash` both still fail with the same bare `400 INVALID_ARGUMENT`, reproduced fresh via
+`scripts/check_llm_chain_reliability.py` on a brand-new key/account. This conclusively rules out
+key/quota as Gemini's explanation - it is a genuine, deterministic request-shape rejection specific to
+this schema, independent of account. Groq succeeded on the same run once its own TPM had a moment to
+recover (transient rate limit only, not the same kind of failure).
+
+Two more real, verified fixes landed from this round:
+1. **`llm_provider_chain_groq_first_purposes` setting** (`app/config/settings.py`, default
+   `"recommend,plan"`) - `get_llm()` now tries Groq FIRST for these two purposes specifically, since
+   Gemini is evidence-confirmed to reliably fail them regardless of key, while `orchestrator`'s simpler
+   TripContext schema keeps Gemini first (live-verified working separately). Trying Gemini first for
+   recommend/plan was pure waste: two guaranteed-failed calls (and real Gemini quota) before ever
+   reaching the provider with an actual chance.
+2. **Groq's phantom-tool-call failure fully explained and fixed.** Inspecting a real failed generation
+   showed the MODEL'S content was already perfect - real listing ids, correct ranks, sensible reasons,
+   honest coverage_notes - it was wrapped in a synthetic `{"name": "json", "arguments": {...}}` tool-call
+   envelope the API then rejected. Root cause: `with_structured_output()`'s default `method` for Groq is
+   `"function_calling"` (tool-call-based delivery); Gemini's default is already `"json_schema"` (native,
+   no tool-call envelope). `run_react()` now explicitly passes `method="json_schema"` to
+   `with_structured_output()` — a no-op for Gemini, a real fix for Groq. Verified live: clean success
+   immediately after the change, on the first non-rate-limited attempt.
+
+**Current picture:** with both fixes in place, a real end-to-end run got as far as
+`RecommendationAgent` succeeding outright (once), and other runs hit Groq's shared 8000 TPM budget -
+expected, since reordering Groq to PRIMARY means it now carries the full ReAct loop's token cost (every
+turn, not just the lightweight finalize call it used to only see as a last-resort fallback), and this
+session's own rapid-fire testing has been hammering that same per-minute budget. Real single-user
+traffic (one request at a time, not back-to-back diagnostic runs) should have materially more headroom
+than what this session's testing pattern shows.
+
 **Next things to try:** re-run a clean end-to-end pass (and `scripts/e2e_check.py`'s full 12 scenarios)
-with fresh Gemini quota to get an unconfounded read on how often `plan_source` actually comes back
-`"llm"` now. If Gemini keeps failing but Groq now reliably picks up the slack, that's a legitimately
-good outcome already - the fallback chain doing its job. The model-swap/schema-simplify ideas for
-Gemini specifically are still on the table if Gemini's own failure rate still matters after that.
+after both quotas (Gemini's 15 req/min, Groq's 8000 TPM) have had time to fully reset, ideally spaced
+out rather than rapid-fire, to get an honest read on real-traffic reliability. If that still shows
+Groq's TPM as a binding constraint under realistic single-request pacing, the next lever is trimming
+the LOOP's own tool-call turns further (not just the finalize summary) or considering a Groq model with
+a larger token budget. The model-swap/schema-simplify ideas for Gemini specifically are now lower
+priority, since Gemini's role for these two purposes is deliberately secondary as of this fix.
 
 ---
 

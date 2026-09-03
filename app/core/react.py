@@ -305,7 +305,17 @@ async def run_react(
     ))
 
     try:
-        structured_llm = llm.with_structured_output(output_schema)
+        # method="json_schema" (not the default per-provider choice) -
+        # found live 2026-09-03: Groq's default for with_structured_output
+        # is "function_calling", which wraps the answer in a synthetic
+        # tool call the API then rejects ("attempted to call tool 'json'
+        # which was not in request.tools") - the MODEL'S OWN generated
+        # content was already correct (real ids, ranks, reasons) every
+        # time this was inspected; only the delivery envelope was wrong.
+        # Forcing json_schema mode (Groq's native structured-output path,
+        # and already Gemini's own default, so this is a no-op there)
+        # fixed it cleanly on every retry that wasn't just rate-limited.
+        structured_llm = llm.with_structured_output(output_schema, method="json_schema")
         output = await structured_llm.ainvoke(finalize_msgs)
     except Exception as e:
         raise ReActError(

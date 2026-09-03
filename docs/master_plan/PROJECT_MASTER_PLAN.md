@@ -526,6 +526,19 @@ by Gemini's own 15 req/min free-tier quota being fully exhausted by this session
 separate, unavoidable rate limit, not a code problem; needs fresh quota to get a clean, unconfounded
 read on how often `plan_source` now comes back `"llm"`. Full details in `TODO.md`, not duplicated here.
 
+**Update 2026-09-03, third pass:** the user swapped in a completely different Gemini account's key
+specifically to rule out "bad key" - Gemini's 400 was identical, confirming it's a genuine,
+key-independent request-shape rejection. Two more real fixes: (1) a new
+`llm_provider_chain_groq_first_purposes` setting (default `"recommend,plan"`) makes `get_llm()` try
+Groq FIRST for exactly the two purposes Gemini is now evidence-confirmed to reliably fail, while
+`orchestrator` keeps Gemini first (it genuinely works there); (2) `run_react()`'s finalization call now
+passes `method="json_schema"` to `with_structured_output()` - Groq's default mode
+(`"function_calling"`) was wrapping perfectly-correct model output in a synthetic tool call the API
+then rejected; forcing native JSON-schema mode (a no-op for Gemini, whose own default already is this)
+fixed it cleanly. 431 tests pass. Live-verified: `RecommendationAgent` succeeded outright in a real run
+post-fix. Remaining friction is Groq's shared 8000 TPM budget under this session's rapid-fire testing
+pattern, not the mechanism itself - full details and next steps in `TODO.md`.
+
 **Also done post-Phase-6, on request:** `ReActConfig.max_steps`/`tool_budget` used to be hardcoded
 per call site (6/5/5/3 steps, 12/10/10/6 tool calls across the four agents) - both now read from
 `settings.react_max_steps`/`react_tool_budget` (`.env`'s `REACT_MAX_STEPS`/`REACT_TOOL_BUDGET`) by
