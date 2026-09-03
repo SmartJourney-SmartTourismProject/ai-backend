@@ -511,13 +511,20 @@ paragraph — that file has the full ruled-out list and the concrete next-steps 
 `"attempted to call tool 'score_candidates'"` error) is now properly fixed - `run_react()` gained a
 `finalize_system` param that replaces the loop's own system prompt (TOOLS section, "you MUST call X")
 with a genuinely tool-free variant per agent for the finalization call, rather than reusing the loop
-prompt plus a trailing nudge. Verified live: Groq now succeeds cleanly on a realistic multi-category
-payload. Gemini's failure is confirmed to be a *separate* problem - the identical tool-free prompt
-still gets Gemini's bare 400 with no further detail - so this fix alone didn't flip `plan_source` to
-`"llm"` in one further end-to-end re-test (ambiguous result, not yet disambiguated; could be Groq
-failing at real scale or its own rate limit being hit third in the chain). Full details, live evidence,
-and the next concrete step (instrument the fallback chain to show every provider's individual result)
-are in `TODO.md`, not duplicated here.
+prompt plus a trailing nudge. Gemini's failure is confirmed to be a *separate* problem - the identical
+tool-free prompt still gets Gemini's bare 400 with no further detail.
+
+**Update 2026-09-03, later the same day:** built `scripts/check_llm_chain_reliability.py` to test each
+provider individually instead of trusting `RunnableWithFallbacks`' first-error-only reporting - found
+Groq genuinely reachable and capable, then found the REAL blocker on realistic (not synthetic) payloads:
+Groq's free tier caps at 8000 tokens/minute, and a real 3-category candidate observation needed 8510 -
+a hard `413`, not vague unreliability. Fixed by trimming both item COUNT (15→10) and per-item FIELD
+bulk (dropped `description`/`photo_url`/`opening_hours`/transit fields, none of which any agent's
+finalization rules reference). **Live-verified working**: a real end-to-end run had `RecommendationAgent`
+succeed with zero failure logged - the first time this session. Further confirmation runs were blocked
+by Gemini's own 15 req/min free-tier quota being fully exhausted by this session's testing - a real,
+separate, unavoidable rate limit, not a code problem; needs fresh quota to get a clean, unconfounded
+read on how often `plan_source` now comes back `"llm"`. Full details in `TODO.md`, not duplicated here.
 
 **Also done post-Phase-6, on request:** `ReActConfig.max_steps`/`tool_budget` used to be hardcoded
 per call site (6/5/5/3 steps, 12/10/10/6 tool calls across the four agents) - both now read from

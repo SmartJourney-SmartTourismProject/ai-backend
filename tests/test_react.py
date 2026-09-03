@@ -313,8 +313,37 @@ async def test_finalization_trims_large_item_lists_in_observations():
     sent = llm._structured.last_messages
     payload = json.loads(sent[-2].content)   # -1 is the "no tools" nudge, -2 is the observations summary
     trimmed = payload["tool_observations"][0]["observation"]
-    assert len(trimmed["items"]) == 15
-    assert "note" in trimmed
+    assert len(trimmed["items"]) == 10
+
+
+async def test_finalization_strips_bulky_fields_not_needed_for_selection():
+    # Regression: found live 2026-09-03 - Groq's free tier caps at 8000
+    # tokens/minute, and a real finalize call with full listing rows (every
+    # field db_tool.py's _row_to_listing_dict returns) needed 8510 - a bare
+    # 413 "Request too large". No agent's finalization rules reference
+    # photo_url/opening_hours/transit fields or free-text descriptions.
+    item = {
+        "id": "x", "name": "Place", "tags": ["stay"], "lat": 1.0, "lon": 2.0,
+        "description": "a very long description " * 20,
+        "photo_url": "https://example.com/photo.jpg",
+        "opening_hours": {"raw": "24/7"},
+        "has_public_transit": True, "nearest_transit_stop": "Some Station",
+    }
+    obs = {"items": [item], "total": 1, "truncated": False}
+    step1 = AIMessage(content="", tool_calls=[_tool_call("search", {"x": 1}, "call-1")])
+    step2 = AIMessage(content="", tool_calls=[])
+    llm = _FakeLLM(turns=[step1, step2], final_answer=_Answer(value="ok"))
+    tool = _make_tool("search", handler=lambda **kw: obs)
+
+    await run_react(llm, tools=[tool], messages=[SystemMessage(content="sys")], output_schema=_Answer)
+
+    sent = llm._structured.last_messages
+    payload = json.loads(sent[-2].content)
+    stripped_item = payload["tool_observations"][0]["observation"]["items"][0]
+    assert stripped_item["id"] == "x"
+    assert stripped_item["name"] == "Place"
+    for field in ("description", "photo_url", "opening_hours", "has_public_transit", "nearest_transit_stop"):
+        assert field not in stripped_item
 
 
 async def test_finalization_is_attempted_exactly_once_regardless_of_stop_reason():

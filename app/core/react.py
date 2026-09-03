@@ -129,16 +129,35 @@ def _cache_key(name: str, args: dict) -> tuple[str, str]:
 # context window advertises. The agent already saw the untruncated result
 # during the loop itself (it's what it reasoned and picked from); only the
 # FINALIZATION copy needs shrinking, since that's what recreates the 400.
-_MAX_OBSERVATION_ITEMS = 15
+#
+# Found live again 2026-09-03, with a HARD number this time: Groq's free
+# tier for openai/gpt-oss-120b caps at 8000 tokens/minute, and a REAL
+# recommendation finalize call (3 categories x 15 items, real DB field
+# density) needed 8510 - a bare 413 "Request too large", not a vague
+# rejection. 15 items alone wasn't tight enough once real listing rows
+# (every field db_tool.py's _row_to_listing_dict returns) replaced the
+# thin synthetic fixtures earlier testing used. Two levers now, not one:
+# fewer items, AND fewer fields per item - `_STRIP_FIELDS` drops fields no
+# agent's finalization RULES ever reference (photo_url, opening_hours,
+# transit info, free-text descriptions) while every field an agent's rules
+# actually need (id, name, tags, lat/lon, rating, price) stays.
+_MAX_OBSERVATION_ITEMS = 10
+_STRIP_FIELDS = frozenset({
+    "description", "photo_url", "opening_hours", "has_public_transit", "nearest_transit_stop",
+})
 
 
 def _trim_observation(obs: Any) -> Any:
     if not isinstance(obs, dict) or not isinstance(obs.get("items"), list):
         return obs
     items = obs["items"]
-    if len(items) <= _MAX_OBSERVATION_ITEMS:
-        return obs
-    return {**obs, "items": items[:_MAX_OBSERVATION_ITEMS],
+    stripped = [
+        {k: v for k, v in item.items() if k not in _STRIP_FIELDS} if isinstance(item, dict) else item
+        for item in items
+    ]
+    if len(stripped) <= _MAX_OBSERVATION_ITEMS:
+        return {**obs, "items": stripped}
+    return {**obs, "items": stripped[:_MAX_OBSERVATION_ITEMS],
             "note": f"trimmed from {len(items)} to {_MAX_OBSERVATION_ITEMS} items for the final answer call"}
 
 

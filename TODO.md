@@ -93,12 +93,41 @@ this session. Still open; still worth the model-swap/schema-simplify attempt abo
 - All 421 tests still pass; the `finalize_system` mechanism itself has dedicated unit coverage in
   `tests/test_react.py` (verifies it's used verbatim, and that omitting it preserves old behavior).
 
-**Next things to try, updated:** the model-swap/schema-simplify ideas above are still on the table for
-Gemini specifically, but given Groq now works cleanly in isolation, the highest-leverage next step is
-narrower: instrument a real end-to-end run to see EVERY provider's individual failure/success in the
-fallback chain (not just the first error `RunnableWithFallbacks` surfaces), to find out definitively
-whether Groq is succeeding-but-something-downstream-fails, genuinely failing at real scale, or being
-rate-limited before it gets a turn.
+**Update (2026-09-03, later same day) — disambiguated, and a second real fix landed:**
+
+Built `scripts/check_llm_chain_reliability.py` (new, reusable diagnostic — tries the finalization call
+against every provider in `LLM_PROVIDER_CHAIN` individually, instead of going through
+`RunnableWithFallbacks`, which only ever surfaces the *first* provider's error). Result: **Gemini fails,
+`gemini-3.6-flash` fails (transient 503 that run), Groq succeeds** — so Groq genuinely was reachable
+and capable, contradicting the "maybe Groq fails too at real scale" open question above.
+
+Re-running the real end-to-end orchestrator, though, still showed `plan_source: "fallback"` — so
+something in the REAL loop-generated payload differed from the clean synthetic diagnostic. Captured
+the actual finalize payload from a live run and sent it directly to Groq: **`413 Request too large` —
+8510 tokens requested against Groq's free-tier cap of 8000 tokens/minute.** A real, hard, measurable
+limit, not vague unreliability — real listing rows (every field `db_tool.py`'s `_row_to_listing_dict`
+returns: `description`, `photo_url`, `opening_hours`, transit fields, etc.) are far bulkier than the
+thin synthetic fixtures earlier testing used, and pushed a realistic 3-category/15-item payload just
+over the ceiling.
+
+**Fixed:** `app/core/react.py`'s observation trimming now does two things instead of one -
+`_MAX_OBSERVATION_ITEMS` lowered 15→10, and a new `_STRIP_FIELDS` denylist drops
+`description`/`photo_url`/`opening_hours`/`has_public_transit`/`nearest_transit_stop` from every item
+in the finalization summary (no agent's finalization RULES reference any of them - id/name/tags/lat/
+lon/rating/price all stay). 422 tests pass; dedicated regression coverage added.
+
+**Live-verified this actually works**: in a real end-to-end orchestrator run post-fix, `RecommendationAgent`
+succeeded with NO failure logged at all (first time this session) — genuine confirmation the fix closes
+the gap it targeted. Further clean re-runs to confirm `plan_source: "llm"` consistently were blocked by
+**Gemini's own 15 req/min free-tier quota**, fully exhausted by this session's testing (a real,
+separate, unavoidable rate limit — not a code issue, and not something more fixes will change; it
+just needs fresh quota, e.g. a different hour/day).
+
+**Next things to try:** re-run a clean end-to-end pass (and `scripts/e2e_check.py`'s full 12 scenarios)
+with fresh Gemini quota to get an unconfounded read on how often `plan_source` actually comes back
+`"llm"` now. If Gemini keeps failing but Groq now reliably picks up the slack, that's a legitimately
+good outcome already - the fallback chain doing its job. The model-swap/schema-simplify ideas for
+Gemini specifically are still on the table if Gemini's own failure rate still matters after that.
 
 ---
 
