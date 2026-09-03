@@ -184,13 +184,40 @@ fix works and that it isn't masking anything by coincidence.
 
 **Honest current tally: 11/12** (scenario 5 is the one remaining, already-understood, data-driven gap).
 
-**Next things to try:** re-run the full 12 scenarios again with real pacing between calls (not
-back-to-back) to get a clean read on how much Groq's shared 8000 TPM budget matters under realistic
-single-request traffic, now that scenario 8 is deterministically fixed and no longer confounds the
-count. If TPM still binds under realistic pacing, the next lever is trimming the LOOP's own tool-call
-turns further (not just the finalize summary) or a Groq model with a larger token budget. The
-model-swap/schema-simplify ideas for Gemini specifically stay lower priority, since Gemini's role for
-recommend/plan is now deliberately secondary.
+**Update (2026-09-03, fifth pass) — realistic-pacing conclusion: Groq's TPM is a real capacity
+ceiling, not a testing artifact, and model-swapping within this account doesn't fix it:**
+
+Ran isolated, individually-spaced single requests (real elapsed time between each, genuine review work
+done in between rather than back-to-back calls) instead of the tight 12-scenario loop. **Still hit
+Groq's 8000 TPM limit on an isolated single recommend call** - the error messages showed the request
+itself needing ~5000 tokens even before any residual usage was counted. A single recommend call's OWN
+requirement is close to two-thirds of the ENTIRE per-minute budget by itself - meaning a full
+request (recommend + plan, both Groq-first) can plausibly need close to or over 8000 tokens on its
+own, independent of how many other requests happened recently. This is a genuine, structural capacity
+limit of `openai/gpt-oss-120b`'s free tier for this workload, not a rapid-fire artifact.
+
+**Investigated model-swapping as a fix - real findings, no clean win yet:**
+- Web search (Groq's 2026 published limits) confirmed `openai/gpt-oss-120b` and `openai/gpt-oss-20b`
+  are both capped at 8000 TPM. Checked live via response headers (`x-ratelimit-limit-tokens`) that
+  these two models **share one depleted pool**, not two separate ones - switching between them buys
+  nothing.
+- `qwen/qwen3.6-27b` (Groq's currently-available model list, checked live via `client.models.list()` -
+  the earlier web search's `llama-3.3-70b-versatile`/`gemma-2-9b` results were stale; those models are
+  no longer served on this account) has its OWN separate, fresh 8000 TPM pool - confirmed live via
+  headers. This means splitting recommend/plan across `gpt-oss-120b` and `qwen/qwen3.6-27b` would
+  genuinely double the combined budget for one end-to-end request. **But** qwen failed outright on the
+  same realistic RecommendationOutput payload (`400 json_validate_failed`, empty generation) - it would
+  need real prompt-compatibility work (possibly a simpler schema, or a different `method`) before it's
+  usable, not a drop-in swap. Not pursued further this session - flagged here as the most promising
+  concrete lever if this becomes a priority again.
+
+**Conclusion for now:** the fallback path is the correct, working answer to this capacity ceiling as it
+stands - every request still produces a complete, valid plan either way, and `plan_source` honestly
+reports which path produced it. Chasing 100% `"llm"` further would mean either (a) real prompt-tuning
+work to get `qwen/qwen3.6-27b` (or another separate-pool model) working reliably, or (b) upgrading past
+Groq's free tier. Neither is warranted unless "how often is it the LLM path" becomes a real product
+requirement rather than a nice-to-have - today's fixes already took it from "essentially never" to
+"works when the budget allows," which is the honest, defensible place to leave it.
 
 ---
 
