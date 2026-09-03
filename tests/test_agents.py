@@ -16,7 +16,7 @@ from app.agents.recommendation_agent import RecommendationAgent
 from app.core.react import ReActError, ReActResult, TraceStep, ToolCallTrace
 from app.core.state import TripState
 from app.models.schemas import (
-    DateWindow, DisasterSummary, DroppedItem, ItineraryDay, ItineraryItem,
+    DateWindow, DisasterEvent, DisasterSummary, DroppedItem, ItineraryDay, ItineraryItem,
     PlannerOutput, RecommendationOutput, Selection, TripContext,
 )
 
@@ -59,6 +59,72 @@ async def test_orchestrator_agent_records_safety_notes_as_soft_errors(monkeypatc
     await OrchestratorAgent().execute(state)
 
     assert any("safety_note" in e for e in state.errors)
+
+
+async def test_orchestrator_agent_synthesizes_safety_note_when_llm_forgot_to(monkeypatch):
+    # Regression: found live (Phase 8, golden scenario 8, 2026-09-03) - the
+    # orchestrator correctly fetched a real red-severity disaster
+    # observation into ctx.disaster, but the LLM left ctx.safety_notes
+    # empty despite the rule telling it to fill it - the warning silently
+    # never reached the user. safety_notes is now derived deterministically
+    # from ctx.disaster, not trusted to the model alone.
+    ctx = TripContext(
+        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
+        date_window=DateWindow(start_date="2026-10-01", end_date="2026-10-01", source="default", dates=["2026-10-01"]),
+        per_day_weather=[],
+        disaster=DisasterSummary(
+            safe=False, max_severity="red",
+            active_events=[DisasterEvent(type="flood", severity="red", title="Test flood event",
+                                          source="test", distance_km=5.0)],
+        ),
+        safety_notes=[],   # the LLM left this empty - the bug this test guards against
+        context_confidence="high",
+    )
+    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
+
+    state = TripState(user_input="x", destination="Kandy")
+    await OrchestratorAgent().execute(state)
+
+    safety_errors = [e for e in state.errors if "safety_note" in e]
+    assert safety_errors, "a red disaster event must always produce a safety_note, even if the LLM forgot"
+    assert "Test flood event" in safety_errors[0]
+
+
+async def test_orchestrator_agent_no_duplicate_safety_note_when_llm_already_wrote_one(monkeypatch):
+    ctx = TripContext(
+        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
+        date_window=DateWindow(start_date="2026-10-01", end_date="2026-10-01", source="default", dates=["2026-10-01"]),
+        per_day_weather=[],
+        disaster=DisasterSummary(
+            safe=False, max_severity="red",
+            active_events=[DisasterEvent(type="flood", severity="red", title="Test flood event",
+                                          source="test", distance_km=5.0)],
+        ),
+        safety_notes=["Active red-level hazard(s) near your destination: Test flood event."],
+        context_confidence="high",
+    )
+    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
+
+    state = TripState(user_input="x", destination="Kandy")
+    await OrchestratorAgent().execute(state)
+
+    safety_errors = [e for e in state.errors if "safety_note" in e]
+    assert len(safety_errors) == 1
+
+
+async def test_orchestrator_agent_no_safety_note_when_no_red_disaster(monkeypatch):
+    ctx = TripContext(
+        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
+        date_window=DateWindow(start_date="2026-10-01", end_date="2026-10-01", source="default", dates=["2026-10-01"]),
+        per_day_weather=[], disaster=DisasterSummary(safe=True, active_events=[]),
+        safety_notes=[], context_confidence="high",
+    )
+    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
+
+    state = TripState(user_input="x", destination="Kandy")
+    await OrchestratorAgent().execute(state)
+
+    assert not any("safety_note" in e for e in state.errors)
 
 
 async def test_orchestrator_agent_degrades_on_react_error(monkeypatch):

@@ -157,13 +157,40 @@ session's own rapid-fire testing has been hammering that same per-minute budget.
 traffic (one request at a time, not back-to-back diagnostic runs) should have materially more headroom
 than what this session's testing pattern shows.
 
-**Next things to try:** re-run a clean end-to-end pass (and `scripts/e2e_check.py`'s full 12 scenarios)
-after both quotas (Gemini's 15 req/min, Groq's 8000 TPM) have had time to fully reset, ideally spaced
-out rather than rapid-fire, to get an honest read on real-traffic reliability. If that still shows
-Groq's TPM as a binding constraint under realistic single-request pacing, the next lever is trimming
-the LOOP's own tool-call turns further (not just the finalize summary) or considering a Groq model with
-a larger token budget. The model-swap/schema-simplify ideas for Gemini specifically are now lower
-priority, since Gemini's role for these two purposes is deliberately secondary as of this fix.
+**Update (2026-09-03, fourth pass) — ran the full 12 scenarios, found and fixed a genuinely new bug:**
+
+Ran `scripts/e2e_check.py` (all 12) right after the Groq-first reorder + `method="json_schema"` fixes
+landed. Result: **10/12** — below target, but NOT because of the fixes above; the Groq-TPM pressure
+predicted in the previous update turned out real (heavy `429` noise throughout this run, from
+back-to-back scenarios all now hitting Groq first). Scenario 5 failed as already known and documented
+(data sparsity, not new). **Scenario 8 (active red disaster) failed for a genuinely new, real reason.**
+
+Traced it directly: `trip_context.disaster` correctly showed the mocked red-severity event every time
+(the orchestrator's tool call worked fine) — but `trip_context.safety_notes` came back **empty**. The
+LLM was fetching the hazard data correctly but not reliably writing it into the free-text field
+`ORCHESTRATOR_SYSTEM_PROMPT` rule 5 asks it to fill ("do not silently omit it") - so the warning
+silently never reached the user, exactly the failure mode that rule exists to prevent.
+
+**Fixed properly, not with another prompt tweak:** `OrchestratorAgent.execute()`
+(`app/agents/orchestrator_agent.py`) now derives `safety_notes` deterministically from
+`ctx.disaster.active_events` whenever a `severity == "red"` event is present, instead of trusting the
+LLM's free-text field alone (it still keeps whatever the LLM DID write, just adds the guaranteed note
+if the LLM's own list came back without one). Matches this codebase's standing rule: never let LLM
+unreliability hide a safety-relevant signal derivable from structured data already in hand — the same
+principle `app/core/scoring.py`/`budget.py`/`itinerary.py` already apply to numbers. 434 tests pass, 3
+new regression tests added. **Live-verified**: scenario 8 now passes even while Groq is mid-rate-limit
+(the fix is deterministic, entirely independent of any LLM call succeeding) — confirming both that the
+fix works and that it isn't masking anything by coincidence.
+
+**Honest current tally: 11/12** (scenario 5 is the one remaining, already-understood, data-driven gap).
+
+**Next things to try:** re-run the full 12 scenarios again with real pacing between calls (not
+back-to-back) to get a clean read on how much Groq's shared 8000 TPM budget matters under realistic
+single-request traffic, now that scenario 8 is deterministically fixed and no longer confounds the
+count. If TPM still binds under realistic pacing, the next lever is trimming the LOOP's own tool-call
+turns further (not just the finalize summary) or a Groq model with a larger token budget. The
+model-swap/schema-simplify ideas for Gemini specifically stay lower priority, since Gemini's role for
+recommend/plan is now deliberately secondary.
 
 ---
 

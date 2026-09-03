@@ -69,8 +69,26 @@ class OrchestratorAgent(BaseAgent):
         state.disaster = ctx.disaster.model_dump()
         if not state.start_location and ctx.start_location:
             state.start_location = ctx.start_location.model_dump()
-        if ctx.safety_notes:
-            state.errors.extend(f"safety_note: {n}" for n in ctx.safety_notes)
+
+        # safety_notes is deliberately NOT trusted to the LLM alone - found
+        # live (Phase 8, golden scenario 8, 2026-09-03): the orchestrator
+        # correctly fetched a real red-severity disaster observation into
+        # `ctx.disaster` every time, but did not reliably also write a note
+        # about it into `ctx.safety_notes` (the free-text field
+        # ORCHESTRATOR_SYSTEM_PROMPT rule 5 asks it to fill) - meaning the
+        # warning silently never reached the user despite the RULE ITSELF
+        # saying "do not silently omit it". Computed deterministically here
+        # from the same disaster data instead of depending on the model to
+        # remember, matching this codebase's general rule: never let LLM
+        # unreliability hide a safety-relevant signal that can be derived
+        # from structured data already in hand.
+        safety_notes = list(ctx.safety_notes)
+        red_events = [e for e in ctx.disaster.active_events if e.severity == "red"]
+        if red_events and not any("red-level hazard" in n for n in safety_notes):
+            titles = ", ".join(e.title for e in red_events)
+            safety_notes.append(f"Active red-level hazard(s) near your destination: {titles}.")
+        if safety_notes:
+            state.errors.extend(f"safety_note: {n}" for n in safety_notes)
 
         state.react_traces["orchestrator"] = {
             "steps_used": result.steps_used, "tools_used": result.tools_used,

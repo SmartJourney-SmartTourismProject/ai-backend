@@ -640,7 +640,7 @@ Per [`BACKEND_ALIGNMENT.md`](../../../backend/docs/BACKEND_ALIGNMENT.md). Start 
 
 "90% working end-to-end with no errors" needs a number attached or it can't be claimed. `scripts/e2e_check.py` runs these 12 scenarios against a live stack and scores each pass/fail.
 
-| # | Scenario | Passes when | Result (2026-09-02, scenario 5 updated 2026-09-03) |
+| # | Scenario | Passes when | Result (last updated 2026-09-03) |
 |---|---|---|---|
 | 1 | `"Plan a 3-day trip to Kandy, budget LKR 60000, culture and history"` | 3 days, every item from DB, `estimated_cost ≤ budget`, all items in/near Kandy district | ✅ PASS |
 | 2 | `"Plan a trip to Ella"` | Resolves to Badulla district, defaults to 1 day, returns real listings | ✅ PASS |
@@ -649,13 +649,24 @@ Per [`BACKEND_ALIGNMENT.md`](../../../backend/docs/BACKEND_ALIGNMENT.md). Start 
 | 5 | Follow-up: `"make day 2 cheaper"` with `session_id` | Day 1 and 3 unchanged byte-for-byte; day 2 cost strictly lower | ⚠️ **mechanism built and verified, one data-availability caveat — see below** |
 | 6 | Follow-up: `"I'm starting from Polonnaruwa"` | `start_location` updated, distances rescored, itinerary reordered | ✅ PASS |
 | 7 | Rainy destination (mock `rain_probability = 0.8` for day 1) | Day 1 has no outdoor-tagged items | ✅ PASS |
-| 8 | Active red disaster within 50 km | Affected items excluded, warning surfaced in `final_response` | ✅ PASS |
+| 8 | Active red disaster within 50 km | Affected items excluded, warning surfaced in `final_response` | ✅ PASS *(real bug found+fixed 2026-09-03 — see below; deterministic now, independent of any LLM call)* |
 | 9 | Calendar connected, 3 free days | `trip_dates` come from free days; weather fetched for exactly those dates | ✅ PASS *(first attempt hit a 429 mid-run — false negative, confirmed a true pass on retry with fresh quota)* |
 | 10 | Policy: a blocked request | Blocked before any LLM or tool call | ✅ PASS |
 | 11 | Gemini unavailable (bad key) | **Deterministic fallback plan returned**, `plan_source = "fallback"`, HTTP 200 | ✅ PASS *(this is the scenario that caught the `except Exception` fix — failed hard before it, passes clean after)* |
 | 12 | District with thin data (e.g. Mullaitivu) | Returns what exists + an explicit "limited coverage" note, never invents | ✅ PASS |
 
-**11 / 12 (91.7%) — meets the target** as of the 2026-09-02 run. Run via `python scripts/e2e_check.py`.
+**11 / 12 (91.7%) — meets the target.** Run via `python scripts/e2e_check.py`.
+
+**Scenario 8, found and fixed 2026-09-03:** a full 12-scenario run (after the Groq-first/`json_schema`
+LLM fixes above) surfaced a genuinely new bug here, unrelated to those fixes: the orchestrator's tool
+call correctly fetched real red-severity disaster data every time, but the LLM didn't reliably also
+write a note about it into `safety_notes` (the free-text field the prompt asks it to fill) — so the
+warning silently never reached the user, exactly what that rule exists to prevent. Fixed by deriving
+`safety_notes` deterministically from `ctx.disaster.active_events` in `OrchestratorAgent.execute()`
+whenever a real `severity == "red"` event is present, rather than trusting the LLM's free text alone —
+the same "never let LLM unreliability hide a derivable signal" principle already applied to scoring/
+budget/itinerary math. Live-verified passing even mid-Groq-rate-limit, confirming the fix is genuinely
+independent of any LLM call succeeding.
 
 **Scenario 5, update 2026-09-03 — the real gap is now built** (`app/core/followup.py` +
 `app/core/followup_replan.py`, a new `targeted_replan` graph node): a deterministic, no-LLM
