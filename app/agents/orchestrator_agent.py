@@ -18,6 +18,7 @@ from app.core.result import AgentResult
 from app.core.state import TripState
 from app.models.schemas import TripContext
 from app.prompts import get_prompt
+from app.prompts.orchestrator_prompt import ORCHESTRATOR_FINALIZE_SYSTEM
 from app.tools.registry import CONTEXT_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class OrchestratorAgent(BaseAgent):
             result = await run_react(
                 llm=get_llm("orchestrator"), tools=CONTEXT_TOOLS, messages=messages,
                 output_schema=TripContext, config=ReActConfig(),
+                finalize_system=ORCHESTRATOR_FINALIZE_SYSTEM,
             )
         except Exception as e:
             # Catches ReActError (run_react's own failure) AND anything

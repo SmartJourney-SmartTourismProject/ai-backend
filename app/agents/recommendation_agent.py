@@ -18,6 +18,7 @@ from app.core.result import AgentResult
 from app.core.state import TripState
 from app.models.schemas import RecommendationOutput
 from app.prompts import get_prompt
+from app.prompts.recommendation_prompt import RECOMMENDATION_FINALIZE_SYSTEM
 from app.tools.registry import DATA_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ class RecommendationAgent(BaseAgent):
             result = await run_react(
                 llm=get_llm("recommend"), tools=DATA_TOOLS, messages=messages,
                 output_schema=RecommendationOutput, config=ReActConfig(),
+                finalize_system=RECOMMENDATION_FINALIZE_SYSTEM,
             )
         except Exception as e:
             # Catches ReActError (run_react's own failure) AND anything

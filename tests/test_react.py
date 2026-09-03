@@ -348,3 +348,42 @@ async def test_finalization_never_replays_raw_tool_call_transcript():
     assert not any(isinstance(m, AIMessage) for m in sent_messages)
     assert not any(isinstance(m, ToolMessage) for m in sent_messages)
     assert isinstance(sent_messages[-1], HumanMessage)
+
+
+async def test_finalize_system_replaces_the_loops_own_system_prompt_when_given():
+    # Regression: found live 2026-09-02/03 - reusing the loop's own system
+    # prompt (which describes real tools and says "you MUST call X") for
+    # the finalization call still pulled Gemini AND Groq toward attempting
+    # a phantom tool call, even with a trailing "no tools here" nudge
+    # appended as a separate message. A genuinely tool-free finalize_system
+    # (no TOOLS section, no "you MUST call" language) is what actually
+    # fixed it - this checks it's used verbatim, not merged with the original.
+    step1 = AIMessage(content="", tool_calls=[_tool_call("search", {"x": 1}, "call-1")])
+    step2 = AIMessage(content="", tool_calls=[])
+    llm = _FakeLLM(turns=[step1, step2], final_answer=_Answer(value="done"))
+    tool = _make_tool("search")
+
+    await run_react(
+        llm, tools=[tool], messages=[SystemMessage(content="loop system prompt - has TOOLS section")],
+        output_schema=_Answer, finalize_system="finalize-only system prompt - no tools",
+    )
+
+    sent_messages = llm._structured.last_messages
+    assert isinstance(sent_messages[0], SystemMessage)
+    assert sent_messages[0].content == "finalize-only system prompt - no tools"
+    assert not any(
+        isinstance(m, SystemMessage) and m.content == "loop system prompt - has TOOLS section"
+        for m in sent_messages
+    )
+
+
+async def test_no_finalize_system_falls_back_to_reusing_the_loop_messages():
+    # Callers that don't pass finalize_system (none currently, but the
+    # parameter is optional) keep the older behaviour.
+    step1 = AIMessage(content="", tool_calls=[])
+    llm = _FakeLLM(turns=[step1], final_answer=_Answer(value="done"))
+
+    await run_react(llm, tools=[], messages=[SystemMessage(content="original system")], output_schema=_Answer)
+
+    sent_messages = llm._structured.last_messages
+    assert sent_messages[0].content == "original system"

@@ -50,3 +50,21 @@ ORCHESTRATOR_SPEC = PromptSpec(
     system=ORCHESTRATOR_SYSTEM_PROMPT,
     output_schema=TripContext,
 )
+
+# The finalization-call variant (app/core/react.py's `finalize_system` param)
+# - deliberately has NO tools section and no "you MUST call" language.
+# Reusing ORCHESTRATOR_SYSTEM_PROMPT for that toolless call is what pulled
+# both Gemini and Groq toward attempting a phantom tool call live
+# (2026-09-02/03) - see react.py's own docstring for the full story.
+ORCHESTRATOR_FINALIZE_SYSTEM = f"""You already gathered facts (destination resolution, weather,
+disaster info, calendar) using tools in earlier turns of this conversation. No tools are available
+now - never attempt to call resolve_place, resolve_district, resolve_start_location,
+get_calendar_free_days, get_weather, or get_disaster_info here; none exist in this turn.
+
+Using ONLY the tool observations already provided above, assemble the final TripContext: the
+destination/district/coordinates a resolve_place or resolve_district observation returned, the
+date_window you already decided on, the weather/disaster observations already gathered, and
+context_confidence based on how resolution actually went. If a fact was never actually observed,
+leave the corresponding field empty/unknown rather than guessing - never invent one.
+{OUTPUT_ONLY_RULE}
+"""

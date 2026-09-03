@@ -60,6 +60,46 @@ below — it used to be silently item-less most of the time, which was arguably 
 gap looked), and (2) `plan_source: "llm"` was still never actually observed in any of ~15 live runs
 this session. Still open; still worth the model-swap/schema-simplify attempt above with fresh quota.
 
+**Update (2026-09-03) — real, partial progress; Gemini's root cause finally isolated as provider-specific:**
+
+- **Groq's failure mode is now genuinely fixed, verified live with realistic data.** The actual root
+  cause (not fully understood until now): `with_structured_output()` for BOTH Gemini and Groq is
+  implemented via tool/function calling under the hood, and the finalization call was reusing each
+  agent's LOOP system prompt — which describes real tools and says "you MUST call X" (by design, for
+  the loop). A trailing "no tools here, don't try" nudge (the earlier fix) wasn't enough once real
+  data gave the model something to reason about; Groq's error was explicit -
+  `"attempted to call tool 'score_candidates'/'json' which was not in request.tools"`. The real fix:
+  `app/core/react.py`'s `run_react()` now takes an optional `finalize_system` param that REPLACES the
+  loop's system prompt entirely for the finalization call with a genuinely tool-free variant (no TOOLS
+  section, no "you MUST call" language) — one per agent
+  (`ORCHESTRATOR_FINALIZE_SYSTEM`/`RECOMMENDATION_FINALIZE_SYSTEM`/`PLANNER_FINALIZE_SYSTEM`/
+  `build_repair_finalize_system()`), wired into all four `run_react()` call sites. Live-verified
+  against Groq with a realistic 3-category, 40-item payload: **clean success** - 3 hotels, 2
+  restaurants, 3 attractions, real ids, real ranks, real reasons, zero phantom tool calls.
+- **Gemini's failure is a genuinely SEPARATE, still-unresolved issue.** The exact same tool-free
+  `finalize_system` prompt, sent directly to `gemini-3.5-flash-lite`, still gets the same bare `400
+  INVALID_ARGUMENT` with no further detail - proving the tool-mandate theory was never the whole
+  story for Gemini specifically (it explained Groq's failure mode, not Gemini's). Gemini's own root
+  cause is still whatever was isolated in the original investigation above (non-monotonic with size,
+  affects `gemini-3.6-flash` identically) - a real, distinct, still-open problem.
+- **The full fallback chain still didn't produce `plan_source: "llm"` in a live end-to-end re-test**,
+  despite Groq succeeding in isolation - the error surfaced still named only `gemini-3.5-flash-lite`
+  (consistent with `RunnableWithFallbacks` raising the *first* error when ALL providers fail, so this
+  doesn't prove Groq failed too, but doesn't rule it out either - a real, larger-scale payload from
+  inside the actual ReAct loop could differ from the clean synthetic test enough to matter, or Groq's
+  own rate limits (8000 TPM, hit live during this session) could be the real blocker in a chain that
+  reaches it third). **Not yet disambiguated** - needs a clean live re-test with fresh quota on both
+  providers, ideally instrumented to show every provider's individual error, not just the first.
+- All 421 tests still pass; the `finalize_system` mechanism itself has dedicated unit coverage in
+  `tests/test_react.py` (verifies it's used verbatim, and that omitting it preserves old behavior).
+
+**Next things to try, updated:** the model-swap/schema-simplify ideas above are still on the table for
+Gemini specifically, but given Groq now works cleanly in isolation, the highest-leverage next step is
+narrower: instrument a real end-to-end run to see EVERY provider's individual failure/success in the
+fallback chain (not just the first error `RunnableWithFallbacks` surfaces), to find out definitively
+whether Groq is succeeding-but-something-downstream-fails, genuinely failing at real scale, or being
+rate-limited before it gets a turn.
+
 ---
 
 ## Follow-up modification handling — ✅ built 2026-09-03, one residual data caveat

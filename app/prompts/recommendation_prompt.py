@@ -51,3 +51,28 @@ RECOMMENDATION_SPEC = PromptSpec(
     system=RECOMMENDATION_SYSTEM_PROMPT,
     output_schema=RecommendationOutput,
 )
+
+# The finalization-call variant (app/core/react.py's `finalize_system` param)
+# - no tools section, no "you MUST call score_candidates" language. Live
+# found (2026-09-02/03): reusing RECOMMENDATION_SYSTEM_PROMPT for the
+# toolless finalization call pulled the model toward attempting
+# score_candidates anyway once real candidate data gave it something to
+# reason about - see app/core/react.py's docstring for the full story.
+RECOMMENDATION_FINALIZE_SYSTEM = f"""You already searched for candidates and, if there was enough
+context to need it, ranked them using tools in earlier turns of this conversation. No tools are
+available now - never attempt to call db_search_listings, db_search_events, travel_matrix, or
+score_candidates here; none exist in this turn.
+
+Using ONLY the tool observations already provided above:
+1.  Recommend ONLY items whose `listing_id` appeared in a db_search_* observation above. Never
+    invent one or recall one from memory.
+2.  If a score_candidates observation is present for a category, copy its `rank`/`score` verbatim
+    for the items you select, in that order - never reorder or re-score it.
+3.  If NO score_candidates observation is present for a category, you may still select items from
+    that category's db_search_* observation; give each a `rank` in the order they appeared and a
+    `score` of 0.5, and add a coverage_note saying no ranking tool ran for that category.
+4.  Select at most: 3 hotels, 2 x duration_days restaurants, 3 x duration_days attractions, 5 events.
+5.  `reason` explains why this item suits this traveller, <= 25 words, and must not contain a
+    number you calculated yourself.
+{OUTPUT_ONLY_RULE}
+"""

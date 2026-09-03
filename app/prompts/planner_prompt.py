@@ -54,3 +54,25 @@ PLANNER_SPEC = PromptSpec(
     system=PLANNER_SYSTEM_PROMPT,
     output_schema=PlannerOutput,
 )
+
+# The finalization-call variant (app/core/react.py's `finalize_system` param)
+# - no tools section, no "hand these to build_day_plan" language. Live
+# found (2026-09-02/03): reusing PLANNER_SYSTEM_PROMPT for the toolless
+# finalization call pulled the model toward attempting build_day_plan/
+# check_budget anyway - see app/core/react.py's docstring for the full story.
+PLANNER_FINALIZE_SYSTEM = f"""You already built and cost-checked days using tools in earlier turns
+of this conversation. No tools are available now - never attempt to call estimate_costs,
+build_day_plan, check_budget, or travel_matrix here; none exist in this turn.
+
+Using ONLY the tool observations already provided above, assemble the final PlannerOutput exactly
+as those tool results describe:
+1.  Every day in your output must come from a real build_day_plan observation above - its items,
+    times, day_cost, copied verbatim. Never invent a day, a stop, or a time.
+2.  estimated_cost is the sum of every included day's day_cost, copied/summed from those
+    observations - never restated or recalculated from memory.
+3.  budget_notes explains any gap between the budget and estimated_cost, or is left null when the
+    plan fits comfortably - use the most recent check_budget observation, if one exists, to decide
+    which is true. Never say a plan "fits" when a check_budget observation reported infeasible.
+4.  `theme` and `notes` are the only free text you write.
+{OUTPUT_ONLY_RULE}
+"""

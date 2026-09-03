@@ -20,6 +20,7 @@ from app.core.result import AgentResult
 from app.core.state import TripState
 from app.models.schemas import PlannerOutput
 from app.prompts import get_prompt
+from app.prompts.planner_prompt import PLANNER_FINALIZE_SYSTEM
 from app.tools.registry import build_planning_tools
 from app.utils.db_pool import get_pool
 
@@ -69,6 +70,7 @@ class PlannerAgent(BaseAgent):
             result = await run_react(
                 llm=get_llm("plan"), tools=tools, messages=messages,
                 output_schema=PlannerOutput, config=ReActConfig(),
+                finalize_system=PLANNER_FINALIZE_SYSTEM,
             )
         except Exception as e:
             # Broadened beyond ReActError - see orchestrator_agent.py's

@@ -507,6 +507,18 @@ most likely next lever, worth a dedicated pass with fresh quota rather than fold
 Filed as a tracked follow-up in [`../../TODO.md`](../../TODO.md) rather than left only in this
 paragraph — that file has the full ruled-out list and the concrete next-steps checklist.
 
+**Update 2026-09-03:** the real root cause of the *reused-tool-mandating-prompt* half of this (Groq's
+`"attempted to call tool 'score_candidates'"` error) is now properly fixed - `run_react()` gained a
+`finalize_system` param that replaces the loop's own system prompt (TOOLS section, "you MUST call X")
+with a genuinely tool-free variant per agent for the finalization call, rather than reusing the loop
+prompt plus a trailing nudge. Verified live: Groq now succeeds cleanly on a realistic multi-category
+payload. Gemini's failure is confirmed to be a *separate* problem - the identical tool-free prompt
+still gets Gemini's bare 400 with no further detail - so this fix alone didn't flip `plan_source` to
+`"llm"` in one further end-to-end re-test (ambiguous result, not yet disambiguated; could be Groq
+failing at real scale or its own rate limit being hit third in the chain). Full details, live evidence,
+and the next concrete step (instrument the fallback chain to show every provider's individual result)
+are in `TODO.md`, not duplicated here.
+
 **Also done post-Phase-6, on request:** `ReActConfig.max_steps`/`tool_budget` used to be hardcoded
 per call site (6/5/5/3 steps, 12/10/10/6 tool calls across the four agents) - both now read from
 `settings.react_max_steps`/`react_tool_budget` (`.env`'s `REACT_MAX_STEPS`/`REACT_TOOL_BUDGET`) by

@@ -11,12 +11,29 @@ Bounded by max_steps (LLM turns, not tool calls), tool_budget (total real
 tool executions - a repeated identical call is served from this run's cache
 and does not count), and wall_clock_s. Every exit is a valid state: whatever
 stopped the loop (a real final answer, max_steps, tool_budget, timeout, or
-an LLM error), the executor always makes ONE more call - the same messages,
-no tools bound, through with_structured_output(output_schema) - to force a
-structured answer from whatever was actually observed. Only if that last
-call itself fails does run_react raise, and that's deliberate: it means the
-caller (an app/agents/ node) has nothing usable and must degrade to
+an LLM error), the executor always makes ONE more call, no tools bound,
+through with_structured_output(output_schema) - to force a structured
+answer from whatever was actually observed. Only if that last call itself
+fails does run_react raise, and that's deliberate: it means the caller (an
+app/agents/ node) has nothing usable and must degrade to
 app/core/fallback.py, not silently return an empty/wrong plan.
+
+`finalize_system`, found necessary live (2026-09-02/03, real Gemini AND Groq
+calls): the loop's own system prompt describes real tools and often says
+"you MUST call X" (by design - that's what drives the ReAct loop). Reusing
+that SAME prompt for the finalization call - even with an added "no tools
+here, don't try" instruction appended as a separate message - was not
+enough to stop the model attempting one anyway once real data gave it
+something to reason about: Gemini rejected the whole request outright,
+Groq's error was explicit ("attempted to call tool 'score_candidates'
+which was not in request.tools", and on a later attempt, a tool named
+'json'). Both providers' with_structured_output() is itself implemented via
+tool/function calling under the hood, so a system prompt that keeps
+describing tools - regardless of what a LATER message says - keeps pulling
+the model toward using one. The real fix is a genuinely tool-free
+finalization prompt with no TOOLS section and no "you MUST call" language,
+passed in via this parameter; callers that don't pass one get the old
+(weaker) behavior of reusing `messages`' own system prompt.
 """
 from __future__ import annotations
 
@@ -27,7 +44,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
-from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
@@ -164,6 +181,7 @@ async def run_react(
     messages: list[BaseMessage],
     output_schema: type[BaseModel],
     config: Optional[ReActConfig] = None,
+    finalize_system: Optional[str] = None,
 ) -> ReActResult:
     config = config or ReActConfig()
     tools_by_name = {t.name: t for t in tools}
@@ -242,17 +260,23 @@ async def run_react(
         {"tool": c.tool, "args": c.args, "observation": _trim_observation(c.observation), "error": c.error}
         for step in trace for c in step.tool_calls
     ]
-    # Also found live 2026-09-02, harder to spot: every agent's own system
-    # prompt tells it it "MUST call" a specific tool before answering
-    # (RECOMMENDATION_SYSTEM_PROMPT rule 2, PLANNER_SYSTEM_PROMPT rule 1,
-    # etc.) - reused verbatim here, that instruction pushed the model to
-    # attempt an actual tool/function call at THIS toolless call too. Gemini
-    # rejected the whole request outright (400 INVALID_ARGUMENT, no further
-    # detail); Groq's error was explicit - "attempted to call tool
-    # 'score_candidates' which was not in request.tools". An explicit
-    # "no tools here, don't try" instruction is what stops the model from
-    # attempting one.
-    finalize_msgs: list[BaseMessage] = list(messages)
+    # Also found live 2026-09-02/03, harder to spot and NOT fully fixed by a
+    # trailing "no tools here" instruction: every agent's own system prompt
+    # describes real tools and tells the model it "MUST call" one before
+    # answering. Reusing that prompt for this call - even appending an
+    # override - still pulled both Gemini and Groq toward attempting a tool
+    # call once real data gave them something to reason about (Groq's error
+    # was explicit: "attempted to call tool 'score_candidates'/'json' which
+    # was not in request.tools"). `finalize_system`, when the caller
+    # provides one, replaces the loop's system prompt ENTIRELY for this
+    # call with a genuinely tool-free one - no TOOLS section, no "you MUST
+    # call" language to fight against. Callers that don't pass one (not yet
+    # updated) fall back to the older, weaker behavior of reusing `messages`
+    # plus a trailing override.
+    if finalize_system is not None:
+        finalize_msgs: list[BaseMessage] = [SystemMessage(content=finalize_system)]
+    else:
+        finalize_msgs = list(messages)
     if observations:
         finalize_msgs.append(HumanMessage(content=json.dumps({"tool_observations": observations}, default=str)))
     finalize_msgs.append(HumanMessage(

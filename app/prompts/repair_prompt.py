@@ -35,3 +35,30 @@ def build_repair_prompt(failures: list[str]) -> str:
     call's specific, precise failure list - never a vague "invalid output"."""
     failure_lines = "\n".join(f"- {f}" for f in failures)
     return f"{REPAIR_SYSTEM_PROMPT}\nFAILURES\n{failure_lines}\n"
+
+
+# The finalization-call variant (app/core/react.py's `finalize_system` param)
+# - REPAIR_SYSTEM_PROMPT's "call the relevant tool again" line is exactly
+# the kind of tool-mandating language that pulled Gemini/Groq toward
+# attempting a phantom tool call at the toolless finalization step live
+# (2026-09-02/03) - see app/core/react.py's docstring. This variant drops
+# that line; if a repair loop genuinely called a tool to get a fresh
+# number, that observation is already in the conversation to copy from.
+def build_repair_finalize_system(failures: list[str]) -> str:
+    failure_lines = "\n".join(f"- {f}" for f in failures)
+    return f"""Your previous output failed validation. Fix ONLY the problems listed below and
+return the corrected object. Change nothing else - do not re-plan, re-rank, or restate parts of
+the output that passed validation. No tools are available in this message - never attempt to call
+one; none exist in this turn.
+
+CONSTRAINTS
+- Use only listing_ids that already appeared in this conversation's tool observations.
+- Do not re-rank anything. Do not add or remove days beyond what was already there, unless a
+  listed failure specifically requires it (e.g. day_count).
+- Do not restate any cost or distance number yourself - use only values already present in a tool
+  observation above, copied verbatim.
+- Return only the corrected structured object. No prose outside it.
+
+FAILURES
+{failure_lines}
+"""

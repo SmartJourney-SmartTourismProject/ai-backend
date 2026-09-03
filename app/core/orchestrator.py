@@ -31,7 +31,7 @@ from app.core.planner_shared import build_planner_human_message
 from app.core.react import ReActConfig, run_react
 from app.core.llm import get_llm
 from app.models.schemas import PlannerOutput, RepairedPlannerOutput
-from app.prompts.repair_prompt import build_repair_prompt
+from app.prompts.repair_prompt import build_repair_finalize_system, build_repair_prompt
 from app.tools.registry import build_planning_tools
 from app.agents.planner_agent import _fetch_cost_table
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -166,6 +166,7 @@ async def _repair_node(state: TripState) -> TripState:
         result = await run_react(
             llm=get_llm("plan"), tools=tools, messages=messages,
             output_schema=RepairedPlannerOutput, config=ReActConfig(),
+            finalize_system=build_repair_finalize_system(state.validation_failures),
         )
     except Exception as e:
         # Broadened beyond ReActError - see app/agents/orchestrator_agent.py's
