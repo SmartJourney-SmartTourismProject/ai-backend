@@ -156,7 +156,10 @@
 let sessionId = null;
 let map = null;
 let markersLayer = null;
-let routeLayer = null;
+let routeLayers = [];
+
+// Distinct colors per day so multi-day routes stay visually separable.
+const DAY_ROUTE_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#9333ea', '#0891b2'];
 
 function initMap() {
   map = L.map('map').setView([7.8731, 80.7718], 8); // Sri Lanka
@@ -165,6 +168,31 @@ function initMap() {
     maxZoom: 18,
   }).addTo(map);
   markersLayer = L.layerGroup().addTo(map);
+}
+
+// OSRM's public demo server (free, no API key/signup) caps requests at 25
+// waypoints per query on shared instances - same ceiling we apply here.
+const OSRM_MAX_WAYPOINTS = 25;
+
+async function fetchRoadRoute(points) {
+  if (points.length < 2 || points.length > OSRM_MAX_WAYPOINTS) return null;
+
+  const coordsParam = points.map(([lat, lon]) => lon + ',' + lat).join(';');
+  const url = 'https://router.project-osrm.org/route/v1/driving/' + coordsParam +
+    '?geometries=geojson&overview=full';
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const route = data.routes && data.routes[0];
+    if (!route) return null;
+    // GeoJSON is [lon, lat]; Leaflet wants [lat, lon].
+    return route.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+  } catch (err) {
+    console.warn('OSRM routing request failed, falling back to straight line:', err);
+    return null;
+  }
 }
 
 function addMessage(text, cls) {
@@ -203,14 +231,18 @@ function renderItinerary(itinerary) {
   });
 }
 
-function renderMap(itinerary) {
+async function renderMap(itinerary) {
   markersLayer.clearLayers();
-  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  routeLayers.forEach(layer => map.removeLayer(layer));
+  routeLayers = [];
   if (!itinerary || itinerary.length === 0) return;
 
-  const points = [];
+  const allPoints = [];
   let stopNumber = 1;
-  itinerary.forEach(day => {
+
+  for (let dayIdx = 0; dayIdx < itinerary.length; dayIdx++) {
+    const day = itinerary[dayIdx];
+    const dayPoints = [];
     (day.items || []).forEach(item => {
       if (typeof item.lat === 'number' && typeof item.lon === 'number') {
         const marker = L.marker([item.lat, item.lon]).bindPopup(
@@ -218,15 +250,24 @@ function renderMap(itinerary) {
           (item.time || '') + '<br>' + (item.notes || '')
         );
         marker.addTo(markersLayer);
-        points.push([item.lat, item.lon]);
+        dayPoints.push([item.lat, item.lon]);
+        allPoints.push([item.lat, item.lon]);
         stopNumber++;
       }
     });
-  });
 
-  if (points.length > 0) {
-    routeLayer = L.polyline(points, { color: '#2563eb', weight: 3, dashArray: '6 6' }).addTo(map);
-    map.fitBounds(L.latLngBounds(points), { padding: [30, 30] });
+    if (dayPoints.length < 2) continue;
+
+    const color = DAY_ROUTE_COLORS[dayIdx % DAY_ROUTE_COLORS.length];
+    const roadRoute = await fetchRoadRoute(dayPoints);
+    const routeLayer = roadRoute
+      ? L.polyline(roadRoute, { color, weight: 4 }).addTo(map)
+      : L.polyline(dayPoints, { color, weight: 3, dashArray: '6 6' }).addTo(map); // fallback: OSRM request failed
+    routeLayers.push(routeLayer);
+  }
+
+  if (allPoints.length > 0) {
+    map.fitBounds(L.latLngBounds(allPoints), { padding: [30, 30] });
   }
 }
 
