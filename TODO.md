@@ -295,7 +295,7 @@ never an API problem.
    Kandy alone went from a handful to 158 priced hotels with photos.
 
 **Result:** `listing_image` 13 → 1,172 rows. Hotels 0 → 1,120 with both a photo and a real price.
-Attractions 0 → 48 and still climbing at time of writing.
+Attractions 0 → 92 (full 25-district sweep, complete).
 
 **Known incomplete — Booking sweep was rate-limited.** 16 of 25 districts returned 0 because
 RapidAPI started 429ing partway through; the 1,120 hotels came from just 9 districts. The

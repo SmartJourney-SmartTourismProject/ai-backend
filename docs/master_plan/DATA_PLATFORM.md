@@ -716,7 +716,7 @@ the three connector bugs found and fixed (category sweep waste, `photo_url` not 
 | Category | With photo | Total | Source |
 |---|---|---|---|
 | hotel | 1,120 | 3,247 | Booking.com (also supplies real prices) |
-| attraction | 48+ | 733 | Wikipedia / Wikimedia Commons |
+| attraction | 92 | 733 | Wikipedia / Wikimedia Commons |
 | restaurant | 0 | 2,592 | **none available free** |
 
 `listing_image` went from 13 → 1,172 rows.
