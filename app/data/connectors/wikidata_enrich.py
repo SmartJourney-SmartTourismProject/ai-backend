@@ -79,12 +79,20 @@ def _find_wikipedia_match(lat: float, lon: float) -> Optional[dict]:
     return hits[0] if hits else None
 
 
+PHOTO_THUMBNAIL_WIDTH_PX = 800  # display size is a 160px card - a full
+# multi-megapixel "original" (some run 6000px+ wide) is pure waste, and
+# was also the direct cause of a frontend bug: Next.js's image optimizer
+# fetches server-side with no browser User-Agent, which Wikimedia's bot-UA
+# policy 429s - a thumbnail URL sidesteps needing the optimizer at all.
+
+
 def _fetch_details(pageid: int) -> Optional[dict]:
     resp = _get_with_retry({
         "action": "query", "pageids": pageid,
         "prop": "extracts|langlinkscount|pageimages",
         "exintro": 1, "explaintext": 1, "exsentences": 3,
-        "piprop": "original", "format": "json",
+        "piprop": "thumbnail", "pithumbsize": PHOTO_THUMBNAIL_WIDTH_PX,
+        "format": "json",
     })
     if resp is None:
         return None
@@ -94,7 +102,7 @@ def _fetch_details(pageid: int) -> Optional[dict]:
     return {
         "extract": page.get("extract"),
         "langlinkscount": page.get("langlinkscount", 0),
-        "photo_url": (page.get("original") or {}).get("source"),
+        "photo_url": (page.get("thumbnail") or {}).get("source"),
         "title": page.get("title"),
     }
 
