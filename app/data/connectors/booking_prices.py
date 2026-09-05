@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 BOOKING_DESTINATION_URL_TMPL = "https://{host}/api/v1/hotels/searchDestination"
 BOOKING_SEARCH_URL_TMPL = "https://{host}/api/v1/hotels/searchHotels"
 MATCH_RADIUS_KM = 1.0
+# Booking returns one page (~20 properties) per search call. One page per
+# district matched only 13 hotels nationwide (measured 2026-09-04), which is
+# far too thin to price or illustrate 3,247 hotel listings. Each extra page
+# is a single additional call, so this stays well inside RapidAPI's free
+# tier while multiplying coverage.
+SEARCH_PAGES = 3
 
 NAME = "booking_prices"
 CADENCE = "weekly"
@@ -106,18 +112,27 @@ class BookingPricesConnector:
         checkin = date.today() + timedelta(days=30)
         checkout = checkin + timedelta(days=1)
         url = BOOKING_SEARCH_URL_TMPL.format(host=settings.booking_rapidapi_host)
-        params = {
-            "dest_id": destination["dest_id"], "search_type": destination["search_type"],
-            "arrival_date": checkin.isoformat(), "departure_date": checkout.isoformat(),
-            "adults": "2", "room_qty": "1", "page_number": "1", "currency_code": "USD",
-        }
-        try:
-            resp = session.get(url, headers=_headers(), params=params, timeout=30)
-            resp.raise_for_status()
-            hotels = resp.json().get("data", {}).get("hotels", [])
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"Booking hotel search failed for '{short_name}': {e}")
-            return []
+        hotels: list[dict[str, Any]] = []
+        for page in range(1, SEARCH_PAGES + 1):
+            params = {
+                "dest_id": destination["dest_id"], "search_type": destination["search_type"],
+                "arrival_date": checkin.isoformat(), "departure_date": checkout.isoformat(),
+                "adults": "2", "room_qty": "1", "page_number": str(page),
+                "currency_code": "USD",
+            }
+            try:
+                resp = session.get(url, headers=_headers(), params=params, timeout=30)
+                resp.raise_for_status()
+                page_hotels = resp.json().get("data", {}).get("hotels", [])
+            except requests.exceptions.RequestException as e:
+                # Keep whatever earlier pages returned rather than losing the
+                # whole district to one failed page.
+                logger.warning(f"Booking hotel search failed for '{short_name}' page {page}: {e}")
+                break
+            if not page_hotels:
+                break
+            hotels.extend(page_hotels)
+            time.sleep(0.5)  # polite pacing between paged calls
 
         results = []
         for hotel in hotels:
@@ -207,9 +222,17 @@ class BookingPricesConnector:
                         "UPDATE travel_listing SET price_per_night=%s, currency=%s, "
                         "price_level=%s, rating=COALESCE(%s, rating), "
                         "rating_count=CASE WHEN %s IS NOT NULL THEN %s ELSE rating_count END, "
+                        # photo_url mirrors the listing_image insert below, the
+                        # same way wikidata_enrich does it - without this a
+                        # listing has a row in listing_image but a NULL
+                        # photo_url, so any caller reading the single-image
+                        # field sees nothing (found live 2026-09-04: all 13
+                        # Booking-sourced images were in this state).
+                        "photo_url=COALESCE(photo_url, %s), "
                         "updated_at=now() WHERE id=%s",
                         (r["price_per_night"], r["currency"], r["price_level"],
-                         r["rating"], r["rating"], r["rating_count"], r["listing_id"]),
+                         r["rating"], r["rating"], r["rating_count"],
+                         r.get("photo_url"), r["listing_id"]),
                     )
                     if r.get("photo_url"):
                         cur.execute(

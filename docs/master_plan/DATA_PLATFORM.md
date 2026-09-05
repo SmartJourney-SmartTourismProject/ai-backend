@@ -697,3 +697,41 @@ current dataset, and must be replaced (not just left running) once real admin re
 **Verification, run live:** `grep -rli "mock" app/` returns only comments documenting the removal
 (checked individually — none operational). A real `/trip-plan` request for Ella returns genuine
 Badulla-district data by real listing ids, not mock-shaped placeholder names.
+
+---
+
+## 10. Enrichment coverage audit — 2026-09-04
+
+Prompted by mapping the Figma UI onto real data: Explore is an image-card grid, and the database
+had **0 listings with a `photo_url`** against 6,572 verified listings.
+
+**Root cause:** `wikidata_enrich` (§5.2) had never successfully run. The 86 listings that had a
+non-NULL `description` carried OSM `description` tags, not Wikipedia extracts. The Wikipedia API
+itself was verified working live, so this was never an upstream problem — see `../../TODO.md` for
+the three connector bugs found and fixed (category sweep waste, `photo_url` not mirrored by
+`booking_prices`, and `page_number` hardcoded to page 1).
+
+**Coverage after the fixes:**
+
+| Category | With photo | Total | Source |
+|---|---|---|---|
+| hotel | 1,120 | 3,247 | Booking.com (also supplies real prices) |
+| attraction | 48+ | 733 | Wikipedia / Wikimedia Commons |
+| restaurant | 0 | 2,592 | **none available free** |
+
+`listing_image` went from 13 → 1,172 rows.
+
+**Two standing limits, both verified live rather than assumed:**
+
+1. **The Booking sweep is incomplete.** 16 of 25 districts returned 0 because RapidAPI began
+   429ing partway through — the 1,120 hotels came from only 9 districts. The connector is
+   idempotent, so **re-running after the quota resets is safe and should substantially raise
+   coverage.** Do this before any demo.
+2. **Restaurants have no free image source.** Booking is hotels-only and Foursquare's photo/rating
+   fields are Premium-only even on the free Pro tier (§5.2, verified 2026-09-02). This needs a
+   frontend category placeholder, not a backend fix.
+
+**Events remain at zero.** Ticketmaster returns no Sri Lanka coverage, re-verified live
+2026-09-04 against Colombo — unchanged from the gap `ticketmaster_events.py` already documents.
+Decision (2026-09-04): the Explore events rail ships empty rather than seeding invented data;
+real coverage would come from admin-entered events (NestJS Phase 7).

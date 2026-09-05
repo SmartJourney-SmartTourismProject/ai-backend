@@ -105,8 +105,15 @@ class WikidataEnrichConnector:
     requires_key = REQUIRES_KEY
     scope = SCOPE
 
-    def __init__(self, limit: int = 200) -> None:
+    def __init__(self, limit: int = 200, category: Optional[str] = None) -> None:
         self.limit = limit
+        # Wikipedia's geosearch only matches places notable enough to have an
+        # article, which in practice means attractions - a 150m search around
+        # a hotel or restaurant almost never returns that business itself.
+        # Restricting by category keeps a sweep from spending ~2 API calls
+        # each on the ~5,800 listings that can't match (verified live
+        # 2026-09-04: 0 of the existing photo_url values came from here).
+        self.category = category
 
     async def fetch(self, district: Optional[District]) -> list[dict[str, Any]]:
         """Fetches candidate listing rows (no description yet) - the actual
@@ -121,12 +128,21 @@ class WikidataEnrichConnector:
             return []
         try:
             with conn, conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id, latitude, longitude FROM travel_listing "
-                    "WHERE district_id = %s AND description IS NULL "
-                    "ORDER BY rating_count DESC NULLS LAST LIMIT %s",
-                    (district.id, self.limit),
+                sql = (
+                    "SELECT tl.id, tl.latitude, tl.longitude FROM travel_listing tl "
+                    "WHERE tl.district_id = %s AND tl.description IS NULL"
                 )
+                params: list[Any] = [district.id]
+                if self.category:
+                    sql += (
+                        " AND tl.category_id = "
+                        "(SELECT id FROM category WHERE name = %s)"
+                    )
+                    params.append(self.category)
+                sql += " ORDER BY tl.rating_count DESC NULLS LAST LIMIT %s"
+                params.append(self.limit)
+
+                cur.execute(sql, params)
                 return [{"id": str(r[0]), "lat": r[1], "lon": r[2]} for r in cur.fetchall()]
         except Exception as e:
             logger.error(f"wikidata_enrich.fetch failed: {e}")
@@ -183,8 +199,9 @@ class WikidataEnrichConnector:
             conn.close()
 
 
-async def run_all(district_filter: str = None, limit: int = 200) -> None:
-    connector = WikidataEnrichConnector(limit=limit)
+async def run_all(district_filter: str = None, limit: int = 200,
+                  category: str = None) -> None:
+    connector = WikidataEnrichConnector(limit=limit, category=category)
     districts = fetch_all_districts()
     if district_filter:
         districts = [d for d in districts if district_filter.lower() in d.name.lower()]
@@ -211,5 +228,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--district", default=None)
     ap.add_argument("--limit", type=int, default=200)
+    ap.add_argument("--category", default=None,
+                    help="Restrict to one category (e.g. 'attraction') - see "
+                         "WikidataEnrichConnector.__init__ for why this matters.")
     args = ap.parse_args()
-    asyncio.run(run_all(args.district, args.limit))
+    asyncio.run(run_all(args.district, args.limit, args.category))

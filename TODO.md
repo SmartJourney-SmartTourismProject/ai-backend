@@ -266,3 +266,51 @@ cheapest available within the price ceiling — correct behavior, since there's 
 swap to. This is the same "Restaurant/attraction pricing is not in OSM" risk
 `PROJECT_MASTER_PLAN.md §7` already documents, not a new problem. Nothing further to build here
 without better source pricing data.
+
+---
+
+## Listing images and events — three connector bugs fixed, two real dead ends (2026-09-04)
+
+**Filed:** 2026-09-04. Triggered by mapping the Figma UI (`frontend-web/figma/`) onto real data:
+Explore is an image-card grid, and the database had **0 listings with a `photo_url`** and 13
+`listing_image` rows against 6,572 verified listings.
+
+**Root cause:** `wikidata_enrich` had effectively never successfully run. The 86 rows that had a
+non-NULL `description` carried OSM `description` tags (e.g. `"chinese"`, `"Hot Dish & Rooms"`),
+not Wikipedia extracts — so nothing had ever populated `photo_url`. The Wikipedia API itself was
+verified working live (Temple of the Tooth → a real `upload.wikimedia.org` URL), so this was
+never an API problem.
+
+**Three real bugs fixed:**
+1. `wikidata_enrich.fetch()` swept **every** category. Wikipedia's 150 m geosearch essentially
+   never matches a hotel or restaurant (they have no article), so a full sweep would spend ~2 API
+   calls each on the ~5,800 listings that structurally cannot match — roughly 2.2 hours for almost
+   no yield. Added a `--category` filter; attractions are the only category worth sweeping.
+2. `booking_prices.upsert()` inserted into `listing_image` but **never set
+   `travel_listing.photo_url`**, unlike `wikidata_enrich` which sets both. All 13 pre-existing
+   Booking images were therefore invisible to any caller reading the single-image field. Fixed to
+   mirror the insert with `COALESCE(photo_url, %s)`; the 13 stuck rows were backfilled.
+3. `booking_prices.fetch()` had `page_number` hardcoded to `"1"` — one page (~20 properties) per
+   district. **This was the actual reason nationwide coverage was 13.** Added `SEARCH_PAGES = 3`.
+   Kandy alone went from a handful to 158 priced hotels with photos.
+
+**Result:** `listing_image` 13 → 1,172 rows. Hotels 0 → 1,120 with both a photo and a real price.
+Attractions 0 → 48 and still climbing at time of writing.
+
+**Known incomplete — Booking sweep was rate-limited.** 16 of 25 districts returned 0 because
+RapidAPI started 429ing partway through; the 1,120 hotels came from just 9 districts. The
+connector is idempotent (`COALESCE` on `photo_url`, `ON CONFLICT DO NOTHING` on `listing_image`),
+so **re-running it after the quota resets is safe and should substantially increase coverage.**
+Worth doing before any demo.
+
+**Dead end 1 — events.** `local_event` has 0 rows and Ticketmaster returns **zero events for
+Sri Lanka**, re-verified live on 2026-09-04 against Colombo. This is unchanged from the gap
+`ticketmaster_events.py`'s own docstring already documents. Decision (2026-09-04): Explore's
+"Local Events & Cultural Festivals" rail ships **empty**, rather than seeding invented data. Real
+coverage would have to come from admin-entered events (NestJS Phase 7).
+
+**Dead end 2 — restaurant images.** 2,592 restaurants have no free image source at all: Booking is
+hotels-only, and Foursquare's photo/rating fields are Premium-only even on the free Pro tier
+(already verified 2026-09-02, `API_SETUP.md` §4.1). These need a **category placeholder in the
+frontend**, not a backend fix. Note the Figma mockup itself repeats one placeholder image across
+every card, so the design already assumes this.
