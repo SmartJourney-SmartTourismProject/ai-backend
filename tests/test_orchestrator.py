@@ -140,6 +140,43 @@ async def test_no_destination_asks_for_clarification(monkeypatch):
     assert result["completed_steps"] == ["validate", "policy", "slot_fill", "respond"]
 
 
+async def _rejects_new_destination_with_stale_plan(state):
+    # Simulates slot_filling.py's real out-of-country branch: a follow-up
+    # deliberately let a newly-mentioned destination overwrite the carried-
+    # over one, but this one gets rejected.
+    state.clarification_needed = (
+        "SmartJourney currently covers destinations within Sri Lanka only. "
+        "New York is in United States - is there a Sri Lankan destination I can help you plan instead?"
+    )
+    return state
+
+
+async def test_clarification_clears_stale_carried_over_itinerary(monkeypatch):
+    # Regression (live-found 2026-09-06): a follow-up asking for "New York"
+    # (rejected as out-of-country) came back with the *previous* turn's
+    # real itinerary (a Matara plan) still attached, mislabeled under
+    # "New York - 2 days" - session restoration carries itinerary over for
+    # legitimate follow-ups ("make it cheaper"), but nothing cleared it
+    # when the turn was rejected outright instead of actually replanning.
+    _patch_agents(monkeypatch, fill_slots_fn=_rejects_new_destination_with_stale_plan)
+
+    state = TripState(
+        user_input="Plan a 2-day trip to New York budget 60000 LKR, culture and history",
+        destination="New York",
+        itinerary=[{"day": 1, "date": "2026-10-01", "items": [{"name": "Turtle Bay"}], "day_cost": 0.0}],
+        estimated_cost=0.0,
+        budget_notes="40 item(s) had no price data and are excluded from the total.",
+        plan_source="fallback",
+    )
+    result = await orchestrator.ainvoke(state)
+
+    assert result["itinerary"] == []
+    assert result["estimated_cost"] is None
+    assert result["budget_notes"] is None
+    assert result["plan_source"] is None
+    assert "Sri Lanka" in result["final_response"]
+
+
 async def test_policy_violation_short_circuits_to_respond(monkeypatch):
     _patch_agents(monkeypatch)
 

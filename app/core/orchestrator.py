@@ -252,6 +252,21 @@ async def _respond_node(state: TripState) -> TripState:
 
     if state.clarification_needed:
         state.final_response = state.clarification_needed
+        # Live-found 2026-09-06: on a follow-up, slot_filling.py deliberately
+        # lets a newly-mentioned destination overwrite the carried-over one
+        # ("actually let's go to Paris instead" is a real feature) - but
+        # when that new destination gets rejected (out-of-country, or any
+        # other clarification trigger), the PREVIOUS turn's itinerary was
+        # still sitting on state from session carry-over, and nothing
+        # cleared it. The response ended up presenting last turn's plan
+        # under the new (rejected) destination's name - e.g. "New York - 2
+        # days" showing Matara's actual stops. A clarification response
+        # should never carry a stale plan under whatever destination the
+        # user just asked about.
+        state.itinerary = []
+        state.estimated_cost = None
+        state.budget_notes = None
+        state.plan_source = None
         state.completed_steps.append("respond")
         return state
 
