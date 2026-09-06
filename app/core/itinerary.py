@@ -54,6 +54,25 @@ class DayConstraints:
     include_dinner: bool = True
     prefer_price_level_max: Optional[int] = None
     cost_lookup: dict[str, float] = field(default_factory=dict)   # item id -> estimated LKR cost (from budget.py)
+    # Live-found 2026-09-06: attractions were chosen purely by rank/count
+    # (items_target), with total_travel_min only ever *reported*, never
+    # used to stop packing more stops into a day - a district can span a
+    # genuine hour-plus drive (e.g. central Kandy town vs. Rangala), and
+    # nothing stopped both ending up in the same day. 180 minutes (3h) of
+    # total travel is a generous cap for real same-area sightseeing, not a
+    # tight one - it's meant to catch "half the day is windshield time",
+    # not to shrink ordinary itineraries. Applies to attractions only -
+    # meals are never dropped for it (a skipped meal is a worse outcome
+    # than a slightly fuller day).
+    max_travel_minutes: float = 180.0
+    # A cumulative cap alone isn't enough - it only rejects stops once the
+    # day's budget is already spent, so one lone far-away attraction placed
+    # EARLY in the day (nothing accumulated yet) sails through untouched.
+    # Live-found 2026-09-06: Rangala Natural Pool (a ~63-minute hop) was
+    # exactly this case - it was only the *second* stop of the day. This
+    # catches a single hop that's unreasonable on its own, regardless of
+    # where in the day it falls.
+    max_single_hop_minutes: float = 45.0
 
 
 @dataclass
@@ -244,6 +263,12 @@ def build_day_plan(
             used_restaurant_ids.add(dinner["id"])
 
     for item_dict, item_type in route:
+        if item_type == "attraction":
+            hop_minutes = travel_minutes(current_point, item_dict)
+            projected_travel = total_travel_min + hop_minutes
+            if hop_minutes > constraints.max_single_hop_minutes or projected_travel > constraints.max_travel_minutes:
+                dropped.append({"id": item_dict["id"], "reason": "would_exceed_daily_travel_budget"})
+                continue
         current_point = emit(item_dict, item_type, current_point)
 
     # 5. Hotel check-out, if this is the departure day (no new dwell time,

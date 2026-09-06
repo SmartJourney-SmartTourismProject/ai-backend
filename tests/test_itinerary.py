@@ -32,6 +32,56 @@ def test_build_day_plan_includes_target_number_of_attractions():
     assert len(attraction_items) == 2
 
 
+def test_build_day_plan_drops_attractions_that_would_exceed_the_travel_budget():
+    # Regression (live-found 2026-09-06): a real Kandy itinerary chained
+    # central-town attractions together with ones a genuine hour-plus drive
+    # away (e.g. Rangala), because attractions were picked purely by rank
+    # and count - total_travel_min was computed but never used to stop
+    # packing more stops into the day. ATTRACTION_2 here is set to a
+    # 200-minute hop, over the 180-minute default budget, so it should be
+    # dropped while the near ATTRACTION_1 is kept.
+    matrix = TravelMatrix()
+    matrix.set(ANCHOR, ATTRACTION_1, 20.0)
+    matrix.set(ATTRACTION_1, ATTRACTION_2, 200.0)
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
+
+    attraction_ids = [i.listing_id for i in plan.items if i.type == "attraction"]
+    assert attraction_ids == ["a1"]
+    assert plan.dropped == [{"id": "a2", "reason": "would_exceed_daily_travel_budget"}]
+
+
+def test_build_day_plan_drops_a_single_far_hop_early_in_the_day():
+    # Regression (live-found 2026-09-06, the actual production case): a
+    # cumulative-only cap doesn't catch a lone far attraction placed EARLY
+    # in the day, since nothing has accumulated yet by the time it's
+    # considered - Rangala Natural Pool (a real ~63-minute hop) was exactly
+    # the *second* stop, well under any cumulative budget at that point.
+    # This is what max_single_hop_minutes (45.0 default) exists for.
+    matrix = TravelMatrix()
+    matrix.set(ANCHOR, ATTRACTION_1, 63.0)   # the lone far hop, right at the start
+    matrix.set(ATTRACTION_1, ATTRACTION_2, 5.0)
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
+
+    attraction_ids = [i.listing_id for i in plan.items if i.type == "attraction"]
+    assert attraction_ids == ["a2"]
+    assert plan.dropped == [{"id": "a1", "reason": "would_exceed_daily_travel_budget"}]
+
+
+def test_build_day_plan_travel_budget_cap_never_drops_meals():
+    # A meal slot is worse to lose than a slightly fuller day - the cap
+    # only ever applies to attractions.
+    matrix = TravelMatrix()
+    matrix.set(ANCHOR, ATTRACTION_1, 20.0)
+    matrix.set(ATTRACTION_1, RESTAURANT, 200.0)
+    constraints = DayConstraints(items_target=1, include_lunch=False, include_dinner=True)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
+
+    restaurant_items = [i for i in plan.items if i.type == "restaurant"]
+    assert len(restaurant_items) == 1
+
+
 def test_build_day_plan_respects_items_target_limit():
     constraints = DayConstraints(items_target=1, include_lunch=False, include_dinner=False)
     plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints)
@@ -133,11 +183,18 @@ def test_build_day_plan_empty_selections_produces_empty_day_not_a_crash():
 
 def test_build_day_plan_uses_travel_matrix_when_available():
     matrix = TravelMatrix()
-    matrix.set(ANCHOR, ATTRACTION_1, 999.0)   # deliberately implausible, to prove it's actually used
+    # 45.0 is deliberately implausible for these fixture coordinates (which
+    # are close enough that haversine would give a much smaller number), to
+    # prove the matrix value is actually used - but still comfortably under
+    # DayConstraints' max_travel_minutes cap (180.0), so this stays a test
+    # of "is the matrix read" and doesn't also trip the travel-budget cap
+    # added 2026-09-06 (see test_build_day_plan_drops_attractions_that_would_
+    # exceed_the_travel_budget for that behavior specifically).
+    matrix.set(ANCHOR, ATTRACTION_1, 45.0)
     constraints = DayConstraints(items_target=1, include_lunch=False, include_dinner=False)
     plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(attractions=[ATTRACTION_1]), constraints, matrix)
 
-    assert plan.total_travel_min == 999.0
+    assert plan.total_travel_min == 45.0
 
 
 def test_build_day_plan_is_deterministic_across_runs():
