@@ -138,6 +138,25 @@ def test_feasibility_uses_cheapest_hotel_and_restaurant():
     assert result.feasible is True
 
 
+def test_feasibility_hotel_charged_twice_not_per_day():
+    # Regression test for a live bug (2026-09-06): a 3-day trip reported
+    # "even the cheapest options come to 118,517 LKR" while the actual
+    # delivered plan cost only 79,011 LKR - a "floor" higher than reality,
+    # because this used to multiply hotel cost by duration_days while the
+    # real planner (itinerary.py) only ever charges the hotel twice
+    # (check-in + check-out), regardless of trip length.
+    hotels = [{"id": "h1", "price_per_night": 20000.0, "currency": "LKR"}]
+    restaurants = [{"id": "r1", "price_min": 1000.0, "currency": "LKR"}]
+    # 3 days: hotel charged twice (not 3x) + 1000*2*3 meals = 40000 + 6000
+    result = feasibility(hotels, restaurants, [], 3, 100000.0, None, {})
+    assert result.cheapest_total == pytest.approx(46000.0)
+
+
+def test_feasibility_no_hotels_charges_nothing_for_stay():
+    result = feasibility([], [{"id": "r1", "price_min": 1000.0, "currency": "LKR"}], [], 3, 100000.0, None, {})
+    assert result.cheapest_total == pytest.approx(6000.0)
+
+
 def test_feasibility_infeasible_when_even_cheapest_exceeds_budget():
     hotels = [{"id": "h1", "price_per_night": 50000.0, "currency": "LKR"}]
     result = feasibility(hotels, [], [], 3, 10000.0, None, {})

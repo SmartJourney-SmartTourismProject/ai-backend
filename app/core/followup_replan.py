@@ -197,6 +197,7 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
             outdoor_tags=frozenset(),
             need_hotel_checkin=(day_num == 1 and bool(ranked_hotels)),
             need_hotel_checkout=(day_num == last_day_num and bool(ranked_hotels)),
+            hotel_nights=max(last_day_num - 1, 0),
             include_lunch=True, include_dinner=True,
             prefer_price_level_max=price_ceiling,
             cost_lookup=all_cost_lookup,

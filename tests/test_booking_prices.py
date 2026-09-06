@@ -40,7 +40,11 @@ async def test_fetch_captures_price_rating_and_photo(monkeypatch):
     monkeypatch.setattr("app.data.connectors.booking_prices.settings.booking_rapidapi_key", "fake-key")
     connector = BookingPricesConnector()
 
-    with patch("app.data.connectors.booking_prices.requests.Session") as MockSession:
+    # fetch() now pages up to SEARCH_PAGES results (see booking_prices.py) -
+    # an empty page 2 is what makes it stop after the one real page instead
+    # of exhausting this mock's side_effect list.
+    with patch("app.data.connectors.booking_prices.requests.Session") as MockSession, \
+         patch("app.data.connectors.booking_prices.time.sleep"):
         session = MockSession.return_value
         session.get.side_effect = [
             _response(json_data={"data": [{"country": "Sri Lanka", "dest_id": "1", "hotels": 50, "search_type": "city"}]}),
@@ -52,6 +56,7 @@ async def test_fetch_captures_price_rating_and_photo(monkeypatch):
                     "photoUrls": ["https://example.com/photo.jpg"],
                 },
             }]}}),
+            _response(json_data={"data": {"hotels": []}}),
         ]
         result = await connector.fetch(_FakeDistrict())
 

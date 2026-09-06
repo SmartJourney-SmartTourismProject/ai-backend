@@ -153,6 +153,31 @@ def test_build_plan_hotel_checkin_on_day_one_checkout_on_last():
     assert last_day_types[-1] == "hotel"
 
 
+def test_build_plan_hotel_cost_scales_with_nights_not_flat_double_charge():
+    # Regression (live-found 2026-09-06): check-in and check-out used to
+    # each independently charge the hotel's full nightly rate, so a trip's
+    # total hotel cost was a fixed "2x nightly rate" no matter how many
+    # nights were actually stayed - a 2-day and a 5-day trip to the same
+    # hotel came out identical. nights = duration_days - 1: a 2-day trip is
+    # 1 night, a 4-day trip is 3 nights. Only one hotel candidate here so
+    # ranking can't pick a different (differently-priced) hotel for the two
+    # durations and confound the comparison.
+    result_2day = _build(_ctx(duration_days=2), hotels=[HOTEL_MID])
+    result_4day = _build(_ctx(duration_days=4), hotels=[HOTEL_MID])
+
+    checkin_2day = result_2day.itinerary[0]["items"][0]
+    checkout_2day = result_2day.itinerary[-1]["items"][-1]
+    checkin_4day = result_4day.itinerary[0]["items"][0]
+    checkout_4day = result_4day.itinerary[-1]["items"][-1]
+
+    assert checkin_2day["type"] == "hotel" and checkout_2day["type"] == "hotel"
+    assert checkout_2day["est_cost"] == 0.0
+    assert checkout_4day["est_cost"] == 0.0
+    # 4-day trip = 3 nights, 2-day trip = 1 night, same hotel -> 3x the cost.
+    assert checkin_4day["est_cost"] == checkin_2day["est_cost"] * 3
+    assert checkin_2day["est_cost"] > 0  # sanity: not just both zero
+
+
 def test_build_plan_estimated_cost_matches_sum_of_day_costs():
     result = _build()
     assert result.estimated_cost == sum(d["day_cost"] for d in result.itinerary)

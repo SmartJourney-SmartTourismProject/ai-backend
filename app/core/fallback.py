@@ -160,6 +160,7 @@ def build_plan_core(
             outdoor_tags=outdoor_tags,
             need_hotel_checkin=(day_num == 1 and bool(ranked_hotels)),
             need_hotel_checkout=(day_num == ctx.duration_days and bool(ranked_hotels)),
+            hotel_nights=max(ctx.duration_days - 1, 0),
             include_lunch=True,
             include_dinner=True,
             prefer_price_level_max=ctx.max_price_level,

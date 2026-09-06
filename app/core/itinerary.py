@@ -44,6 +44,12 @@ class DayConstraints:
     outdoor_tags: frozenset[str] = field(default_factory=frozenset)   # from tag_vocabulary.is_outdoor
     need_hotel_checkin: bool = False       # day 1
     need_hotel_checkout: bool = False      # last day
+    # nights = duration_days - 1 (a 3-day trip is 2 nights; a 1-day trip is
+    # 0 nights, so no accommodation is actually stayed). Real hotel cost -
+    # live-found 2026-09-06: check-in and check-out each independently
+    # charged the full nightly rate regardless of trip length, so a 1-day
+    # and a 5-day trip to the same hotel came out to the identical total.
+    hotel_nights: int = 1
     include_lunch: bool = True
     include_dinner: bool = True
     prefer_price_level_max: Optional[int] = None
@@ -129,7 +135,7 @@ def build_day_plan(
     def travel_km(a: dict, b: dict) -> float:
         return haversine_km(a, b)
 
-    def emit(item_dict: dict, item_type: str, from_point: dict) -> dict:
+    def emit(item_dict: dict, item_type: str, from_point: dict, cost_override: Optional[float] = None) -> dict:
         """Advances the clock past travel time + dwell time, appends an
         ItineraryItem, and returns the point to travel from next.
 
@@ -140,7 +146,13 @@ def build_day_plan(
         which was simply wrong whenever the anchor and the first stop
         aren't the same point (the common case) - found by a test that
         set an implausible matrix distance and asserted it was actually
-        used; total_travel_min silently stayed 0.0 instead."""
+        used; total_travel_min silently stayed 0.0 instead.
+
+        cost_override exists solely for hotel check-in/check-out (below):
+        the normal per-item cost_lookup gives a nightly rate, not a
+        whole-stay total, so those two call sites compute the real
+        nights-scaled cost themselves rather than letting this fall
+        through to the plain per-item lookup."""
         nonlocal clock, total_km, total_travel_min, day_cost
         mins = travel_minutes(from_point, item_dict)
         km = travel_km(from_point, item_dict)
@@ -151,7 +163,7 @@ def build_day_plan(
         start = clock
         dwell = DWELL_MINUTES.get(item_type, 60)
         clock = _add_minutes(clock, dwell)
-        cost = _cost_of(item_dict, constraints.cost_lookup)
+        cost = _cost_of(item_dict, constraints.cost_lookup) if cost_override is None else cost_override
         day_cost += cost
 
         items.append(ItineraryItem(
@@ -164,9 +176,15 @@ def build_day_plan(
 
     current_point = anchor
 
-    # 1. Hotel check-in, if this is the arrival day.
+    # 1. Hotel check-in, if this is the arrival day. The whole stay's cost
+    #    is charged here (nightly rate x nights) - check-out below is a
+    #    free "closing" bookend, not a second charge for the same stay.
     if constraints.need_hotel_checkin and selections.hotels:
-        current_point = emit(selections.hotels[0], "hotel", current_point)
+        nightly_rate = _cost_of(selections.hotels[0], constraints.cost_lookup)
+        current_point = emit(
+            selections.hotels[0], "hotel", current_point,
+            cost_override=nightly_rate * constraints.hotel_nights,
+        )
 
     # 2. Weather/disaster filter -> attractions, in ranked order, up to items_target.
     #    Dropped items are recorded with a reason, per the plan's contract -
@@ -228,10 +246,12 @@ def build_day_plan(
     for item_dict, item_type in route:
         current_point = emit(item_dict, item_type, current_point)
 
-    # 5. Hotel check-out, if this is the departure day (no new dwell time -
-    #    just closes the day at the hotel for map/route completeness).
+    # 5. Hotel check-out, if this is the departure day (no new dwell time,
+    #    no additional cost - the whole stay was already charged at
+    #    check-in above; this just closes the day at the hotel for
+    #    map/route completeness).
     if constraints.need_hotel_checkout and selections.hotels:
-        emit(selections.hotels[0], "hotel", current_point)
+        emit(selections.hotels[0], "hotel", current_point, cost_override=0.0)
 
     return DayPlan(
         day=day, date=date, items=items,

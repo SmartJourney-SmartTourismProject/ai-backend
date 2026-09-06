@@ -258,8 +258,25 @@ async def _respond_node(state: TripState) -> TripState:
     hard_errors = [e for e in state.errors if not e.startswith(_SOFT_ERROR_PREFIXES)]
     soft_notes = [e for e in state.errors if e.startswith(_SOFT_ERROR_PREFIXES)]
 
-    if hard_errors and not state.itinerary:
-        state.final_response = "Sorry, I ran into an issue: " + "; ".join(hard_errors)
+    # A day entry with an empty items list is not a plan - live-found
+    # 2026-09-06: a follow-up that lost its destination mid-conversation
+    # produced itinerary=[{"day": 1, "items": [], "day_cost": 0.0}] with no
+    # hard_errors logged, and the old `hard_errors and not state.itinerary`
+    # check let that fall through to "Here's your trip plan... 0 day(s)
+    # planned" - claiming success on an empty plan is worse than the
+    # clarifying question this should have asked instead.
+    has_real_content = any(day.get("items") for day in state.itinerary)
+
+    if not has_real_content:
+        if hard_errors:
+            state.final_response = "Sorry, I ran into an issue: " + "; ".join(hard_errors)
+        elif not state.destination:
+            state.final_response = "I wasn't able to put together a plan - which destination would you like to visit?"
+        else:
+            state.final_response = (
+                f"I couldn't find enough options to plan a trip to {state.destination} right now. "
+                "Could you try adjusting the destination, dates, or budget?"
+            )
     else:
         state.final_response = (
             f"Here's your trip plan for {state.destination or 'your destination'}: "

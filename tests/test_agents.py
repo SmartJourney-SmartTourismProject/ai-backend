@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 import app.agents.orchestrator_agent as orchestrator_agent_module
 import app.agents.recommendation_agent as recommendation_agent_module
 import app.agents.planner_agent as planner_agent_module
-from app.agents.orchestrator_agent import OrchestratorAgent
+from app.agents.orchestrator_agent import OrchestratorAgent, filter_ungrounded_safety_notes
 from app.agents.planner_agent import PlannerAgent
 from app.agents.recommendation_agent import RecommendationAgent
 from app.core.react import ReActError, ReActResult, TraceStep, ToolCallTrace
@@ -59,6 +59,53 @@ async def test_orchestrator_agent_records_safety_notes_as_soft_errors(monkeypatc
     await OrchestratorAgent().execute(state)
 
     assert any("safety_note" in e for e in state.errors)
+
+
+def test_filter_ungrounded_safety_notes_drops_wrong_date():
+    # Regression (live-found 2026-09-06): the orchestrator LLM wrote "Carry
+    # an umbrella on May 3rd due to high rain probability" into safety_notes
+    # for a trip whose real dates were nowhere near May - a hallucination
+    # violating the prompt's own NO_INVENTION_RULE.
+    notes = ["Carry an umbrella on May 3rd due to high rain probability."]
+    kept = filter_ungrounded_safety_notes(notes, valid_iso_dates=["2026-09-06", "2026-09-07"])
+    assert kept == []
+
+
+def test_filter_ungrounded_safety_notes_keeps_correct_date():
+    notes = ["Rain expected on September 6th - bring a light jacket."]
+    kept = filter_ungrounded_safety_notes(notes, valid_iso_dates=["2026-09-06", "2026-09-07"])
+    assert kept == notes
+
+
+def test_filter_ungrounded_safety_notes_keeps_iso_date_within_window():
+    notes = ["Flooding possible near the coast on 2026-09-07."]
+    kept = filter_ungrounded_safety_notes(notes, valid_iso_dates=["2026-09-06", "2026-09-07"])
+    assert kept == notes
+
+
+def test_filter_ungrounded_safety_notes_keeps_notes_with_no_date():
+    # The legitimate case (test_orchestrator_agent_records_safety_notes_as_
+    # soft_errors) - a real disaster observation with no date mentioned at
+    # all should never be touched by a date-grounding check.
+    notes = ["flooding reported 20km from destination"]
+    kept = filter_ungrounded_safety_notes(notes, valid_iso_dates=["2026-09-06"])
+    assert kept == notes
+
+
+async def test_orchestrator_agent_drops_hallucinated_date_from_safety_notes(monkeypatch):
+    ctx = TripContext(
+        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
+        date_window=DateWindow(start_date="2026-09-06", end_date="2026-09-06", source="default", dates=["2026-09-06"]),
+        per_day_weather=[], disaster=DisasterSummary(safe=True, active_events=[]),
+        safety_notes=["Carry an umbrella on May 3rd due to high rain probability."],
+        context_confidence="high",
+    )
+    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
+
+    state = TripState(user_input="x", destination="Kandy")
+    await OrchestratorAgent().execute(state)
+
+    assert not any("safety_note" in e for e in state.errors)
 
 
 async def test_orchestrator_agent_synthesizes_safety_note_when_llm_forgot_to(monkeypatch):

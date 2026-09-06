@@ -5,8 +5,10 @@ never recommends a place or builds an itinerary.
 """
 from __future__ import annotations
 
+import calendar
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -22,6 +24,47 @@ from app.prompts.orchestrator_prompt import ORCHESTRATOR_FINALIZE_SYSTEM
 from app.tools.registry import CONTEXT_TOOLS
 
 logger = logging.getLogger(__name__)
+
+_MONTH_DAY_PATTERN = re.compile(
+    r"\b(" + "|".join(calendar.month_name[1:]) + r")\s+(\d{1,2})(?:st|nd|rd|th)?\b", re.IGNORECASE
+)
+_ISO_DATE_PATTERN = re.compile(r"\b\d{4}-(\d{2})-(\d{2})\b")
+_MONTH_NUMBERS = {name.lower(): i for i, name in enumerate(calendar.month_name) if name}
+
+
+def _mentioned_month_days(text: str) -> list[tuple[int, int]]:
+    """(month, day) tuples for every date-like mention in free text - both
+    "May 3rd" and "2026-05-03" phrasings, since the LLM writes either."""
+    found = [(_MONTH_NUMBERS[m.group(1).lower()], int(m.group(2))) for m in _MONTH_DAY_PATTERN.finditer(text)]
+    found += [(int(m.group(1)), int(m.group(2))) for m in _ISO_DATE_PATTERN.finditer(text)]
+    return found
+
+
+def filter_ungrounded_safety_notes(notes: list[str], valid_iso_dates: list[str]) -> list[str]:
+    """Drops any safety_note that names a specific date outside the trip's
+    actual date window - live-found 2026-09-06: the orchestrator LLM wrote
+    "Carry an umbrella on May 3rd due to high rain probability" into
+    safety_notes despite May 3rd matching no date anywhere in the real
+    conversation, directly violating ORCHESTRATOR_SYSTEM_PROMPT's own
+    NO_INVENTION_RULE and rule 5 (safety_notes is scoped to disaster hazards
+    only, not invented weather advice). A note that names no date at all
+    (e.g. "flooding reported 20km from destination") is left alone - this
+    only catches the specific, provably-wrong-date failure mode, not every
+    possible hallucination the free-text field could contain."""
+    valid_month_days = set()
+    for iso_date in valid_iso_dates:
+        m = re.match(r"^\d{4}-(\d{2})-(\d{2})$", iso_date)
+        if m:
+            valid_month_days.add((int(m.group(1)), int(m.group(2))))
+
+    kept = []
+    for note in notes:
+        mentioned = _mentioned_month_days(note)
+        if mentioned and not any(md in valid_month_days for md in mentioned):
+            logger.warning(f"Dropping safety_note with a date outside the trip window: {note!r}")
+            continue
+        kept.append(note)
+    return kept
 
 
 class OrchestratorAgent(BaseAgent):
@@ -82,7 +125,7 @@ class OrchestratorAgent(BaseAgent):
         # remember, matching this codebase's general rule: never let LLM
         # unreliability hide a safety-relevant signal that can be derived
         # from structured data already in hand.
-        safety_notes = list(ctx.safety_notes)
+        safety_notes = filter_ungrounded_safety_notes(list(ctx.safety_notes), ctx.date_window.dates)
         red_events = [e for e in ctx.disaster.active_events if e.severity == "red"]
         if red_events and not any("red-level hazard" in n for n in safety_notes):
             titles = ", ".join(e.title for e in red_events)

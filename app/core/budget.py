@@ -128,7 +128,18 @@ def feasibility(
     # cost_reference's seed data) - no special-casing needed, the estimate
     # chain already returns 0.0 for those.
 
-    cheapest_total = (hotel_cost * duration_days) + (meal_cost * 2 * duration_days)
+    # Hotel cost is charged exactly twice regardless of trip length - once
+    # at check-in, once at check-out (app/core/itinerary.py's build_day_plan
+    # emits the hotel on day 1 and again on the last day, never per-night).
+    # Multiplying by duration_days here used to overstate the true floor for
+    # any trip that wasn't exactly 2 days - live-found 2026-09-06: a 3-day
+    # Kandy trip reported "even the cheapest options come to 118,517 LKR"
+    # while the actual delivered plan cost only 79,011 LKR, a floor that was
+    # literally higher than reality. Matching the real charge count fixes
+    # the contradiction (duration_days=2 is unaffected either way, since
+    # 2 nights and "2 emits" coincide - see test_feasibility_uses_cheapest_hotel_and_restaurant).
+    hotel_charges = 2 if hotels else 0
+    cheapest_total = (hotel_cost * hotel_charges) + (meal_cost * 2 * duration_days)
     unknown = u1 + u2
 
     return Feasibility(

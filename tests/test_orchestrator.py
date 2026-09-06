@@ -241,6 +241,41 @@ async def test_verify_failure_triggers_one_repair_then_fallback(monkeypatch):
     assert result["plan_source"] == "fallback"
 
 
+async def test_empty_fallback_itinerary_does_not_claim_success(monkeypatch):
+    # Regression (live-found 2026-09-06): a day with an empty items list
+    # used to still hit the "Here's your trip plan... 0 day(s) planned"
+    # success message whenever there were no *hard* errors logged - the
+    # old check only looked at `hard_errors and not state.itinerary`, which
+    # never triggers for a non-empty list of day dicts. recommend "failing"
+    # via produce=False (not validation_ok=False) is what reaches fallback
+    # with zero hard errors logged - the exact combination that slipped
+    # through before. Confirmed a real destination is still known here, so
+    # this should explain the gap rather than ask a question already answered.
+    _patch_agents(monkeypatch, recommendation_agent=_FakeRecommendationAgent(produce=False))
+
+    state = TripState(user_input="x", destination="Kandy", duration_days=1)
+    result = await orchestrator.ainvoke(state)
+
+    assert result["errors"] == []
+    assert "Here's your trip plan" not in result["final_response"]
+    assert "Kandy" in result["final_response"]
+
+
+async def test_empty_itinerary_with_no_destination_asks_for_one(monkeypatch):
+    _patch_agents(
+        monkeypatch,
+        fill_slots_fn=_passthrough,
+        recommendation_agent=_FakeRecommendationAgent(produce=False),
+    )
+
+    state = TripState(user_input="x", duration_days=1)
+    result = await orchestrator.ainvoke(state)
+
+    assert result["errors"] == []
+    assert "Here's your trip plan" not in result["final_response"]
+    assert "destination" in result["final_response"].lower()
+
+
 async def test_repair_node_degrades_when_get_llm_itself_raises(monkeypatch):
     # Regression (Phase 8, scenario 11) - see app/agents/orchestrator_agent.py's
     # identical fix. _repair_node's own get_llm("plan") call is inside its

@@ -34,7 +34,7 @@ def _geosearch_json(pageid=24362778, dist=11):
 def _details_json(pageid=24362778, extract="A Buddhist temple.", langlinkscount=31, has_photo=True):
     page = {"pageid": pageid, "title": "Temple of the Tooth", "extract": extract, "langlinkscount": langlinkscount}
     if has_photo:
-        page["original"] = {"source": "https://upload.wikimedia.org/x.jpg", "width": 100, "height": 100}
+        page["thumbnail"] = {"source": "https://upload.wikimedia.org/x.jpg", "width": 100, "height": 100}
     return {"query": {"pages": {str(pageid): page}}}
 
 
