@@ -28,8 +28,9 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from app.core.budget import (
-    CostReferenceTable, budget_per_day, check_budget, estimate_item_cost, feasibility,
+    CostReferenceTable, budget_per_day, check_budget, compose_budget_notes, cost_lookup_for, feasibility,
 )
+from app.core.clustering import partition_by_geography
 from app.core.itinerary import DayConstraints, DaySelections, build_day_plan
 from app.core.scoring import ScoringContext, TravelMatrix, rank
 
@@ -68,16 +69,6 @@ class FallbackPlanResult:
 RAIN_THRESHOLD = 0.6   # matches DETERMINISM_AND_VALIDATION.md §5's weather_respect validator rule
 
 
-def _cost_lookup_for(items: list[dict], category: str, district_id: Optional[str],
-                     cost_table: CostReferenceTable) -> dict[str, float]:
-    out = {}
-    for i in items:
-        est = estimate_item_cost(i, category, district_id, cost_table)
-        if est.value is not None:
-            out[i["id"]] = est.value
-    return out
-
-
 def build_plan_core(
     ctx: PlanningContext,
     candidate_hotels: list[dict],
@@ -102,7 +93,7 @@ def build_plan_core(
     anchor = ctx.start_location or (candidate_hotels[0] if candidate_hotels else {"lat": 0.0, "lon": 0.0})
 
     def _rank(items: list[dict], category: str) -> list[dict]:
-        cost_lookup = _cost_lookup_for(items, category, ctx.district_id, cost_table)
+        cost_lookup = cost_lookup_for(items, category, ctx.district_id, cost_table)
         scoring_ctx = ScoringContext(
             interests=ctx.interests, anchor=anchor, matrix=matrix,
             budget_per_day=budget_per_day_by_category, cost_estimates=cost_lookup,
@@ -122,9 +113,9 @@ def build_plan_core(
     )
 
     all_cost_lookup = {
-        **_cost_lookup_for(ranked_hotels, "hotel", ctx.district_id, cost_table),
-        **_cost_lookup_for(ranked_restaurants, "restaurant", ctx.district_id, cost_table),
-        **_cost_lookup_for(ranked_attractions, "attraction", ctx.district_id, cost_table),
+        **cost_lookup_for(ranked_hotels, "hotel", ctx.district_id, cost_table),
+        **cost_lookup_for(ranked_restaurants, "restaurant", ctx.district_id, cost_table),
+        **cost_lookup_for(ranked_attractions, "attraction", ctx.district_id, cost_table),
     }
 
     days: list[dict] = []
@@ -144,6 +135,17 @@ def build_plan_core(
     used_attraction_ids: set[str] = set()
     used_restaurant_ids: set[str] = set()
 
+    # Geographic day clustering (itinerary-quality/token-reduction pass,
+    # Defect 1a's real fix) - previously each day just took the top
+    # `items_target` still-unused attractions by GLOBAL SCORE, with no
+    # geography at all: two attractions 60km apart could land on the same
+    # day if they simply ranked 1st and 2nd. Partitioned ONCE, upfront,
+    # over the whole ranked pool; day N then prefers its own cluster,
+    # falling back to any other still-unused item (score order) if the
+    # cluster was thinned by weather/price filtering, then to full reuse -
+    # same three-tier degrade the rest of this function already uses.
+    attraction_clusters = partition_by_geography(ranked_attractions, ctx.duration_days, ctx.pace_items_per_day)
+
     for day_num in range(1, ctx.duration_days + 1):
         day_date = ctx.start_date + timedelta(days=day_num - 1)
         day_date_str = day_date.isoformat()
@@ -151,7 +153,10 @@ def build_plan_core(
 
         day_anchor = anchor if day_num == 1 else hotel_anchor
 
-        fresh_attractions = [a for a in ranked_attractions if a["id"] not in used_attraction_ids]
+        cluster = [a for a in attraction_clusters[day_num - 1] if a["id"] not in used_attraction_ids]
+        cluster_ids = {a["id"] for a in cluster}
+        tail = [a for a in ranked_attractions if a["id"] not in used_attraction_ids and a["id"] not in cluster_ids]
+        fresh_attractions = cluster + tail
         fresh_restaurants = [r for r in ranked_restaurants if r["id"] not in used_restaurant_ids]
 
         constraints = DayConstraints(
@@ -194,20 +199,7 @@ def build_plan_core(
     estimated_cost = round(sum(d["day_cost"] for d in days), 2)
     budget_check = check_budget(day_costs_for_budget_check, ctx.budget, feas.unknown_cost_items)
 
-    budget_notes = None
-    if not feas.feasible:
-        budget_notes = (
-            f"Even the most affordable options come to an estimated {feas.cheapest_total:,.0f} LKR, "
-            f"which is {feas.shortfall:,.0f} LKR over the stated budget."
-        )
-    elif not budget_check.feasible:
-        budget_notes = (
-            f"Estimated cost is {budget_check.total:,.0f} LKR, "
-            f"{budget_check.over_by:,.0f} LKR over the {ctx.budget:,.0f} LKR budget."
-        )
-    if budget_check.unknown_cost_items:
-        note = f"{len(budget_check.unknown_cost_items)} item(s) had no price data and are excluded from the total."
-        budget_notes = f"{budget_notes} {note}" if budget_notes else note
+    budget_notes = compose_budget_notes(feas, budget_check, ctx.budget)
 
     final_response = (
         f"Here's your trip plan for {ctx.destination_name}: {ctx.duration_days} day(s) planned, "

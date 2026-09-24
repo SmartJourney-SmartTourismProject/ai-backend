@@ -1,10 +1,12 @@
 # tests/test_orchestrator.py
-# Phase 6: the graph is now validate->policy->slot_fill->orchestrate->
-# recommend->plan->verify->(repair|fallback)->respond, with three ReAct
-# agents (app/agents/) instead of the old tool-calling nodes. This file
-# tests the GRAPH'S ROUTING AND STATE LOGIC in isolation - every agent is
-# faked so no real LLM/tool call happens; each real agent has its own
-# dedicated test coverage (test_orchestrator_agent.py, etc.).
+# The graph is validate->policy->slot_fill->orchestrate->recommend->plan->
+# verify->(repair|fallback)->respond. This file tests the GRAPH'S ROUTING
+# AND STATE LOGIC in isolation - every node's real work is faked so no real
+# LLM/tool/DB call happens; each real piece has its own dedicated test
+# coverage (test_context_resolver.py, test_agents.py, etc.). "orchestrate"
+# is now app/core/context_resolver.py's deterministic resolve_trip_context()
+# rather than a ReAct agent - see that node's own tests for its behavior;
+# here it's just faked like every other node.
 
 from unittest.mock import AsyncMock
 
@@ -12,7 +14,40 @@ import app.core.orchestrator as orchestrator_module
 from app.core.output_validator import ValidationResult
 from app.core.react import ReActError
 from app.core.state import TripState
-from app.core.orchestrator import orchestrator
+from app.core.orchestrator import _trim_previous_output, orchestrator
+
+
+def test_trim_previous_output_strips_bulky_fields_but_keeps_repair_relevant_ones():
+    # B3 (AI_BACKEND_OPTIMIZATION_PLAN.md): name/lat/lon/currency/notes are
+    # already in the human message via build_planner_human_message - only
+    # what identifies an item and what a repair might check needs to
+    # survive here.
+    planner_output = {
+        "itinerary": [{
+            "day": 1, "date": "2026-10-01", "day_cost": 1500.0,
+            "items": [{
+                "time": "09:00", "end_time": "10:00", "type": "attraction",
+                "listing_id": "a1", "name": "Temple", "lat": 7.29, "lon": 80.63,
+                "est_cost": 500.0, "currency": "LKR", "notes": "arrive early",
+            }],
+        }],
+        "estimated_cost": 1500.0, "currency": "LKR", "budget_notes": None, "plan_source": "llm",
+    }
+
+    trimmed = _trim_previous_output(planner_output)
+
+    assert trimmed == {
+        "itinerary": [{
+            "day": 1, "date": "2026-10-01", "day_cost": 1500.0,
+            "items": [{"listing_id": "a1", "type": "attraction",
+                       "time": "09:00", "end_time": "10:00", "est_cost": 500.0}],
+        }],
+        "estimated_cost": 1500.0,
+    }
+
+
+def test_trim_previous_output_handles_empty_input():
+    assert _trim_previous_output({}) == {"itinerary": [], "estimated_cost": None}
 
 
 async def _passthrough(state):
@@ -30,24 +65,22 @@ class _FakeAgentResult:
         self.message = message
 
 
-class _FakeOrchestratorAgent:
-    """Stands in for the real ReAct OrchestratorAgent. `context` controls
+def _fake_context_resolver(context=None, error=None):
+    """Stands in for the real resolve_trip_context(). `context` controls
     whether resolution "succeeded" (sets trip_context/weather/disaster) or
     "failed" (leaves them unset and records an advisory/hard error, per the
-    real agent's own error-handling)."""
+    real function's own error-handling) - matches resolve_trip_context's
+    own contract: mutates state in place, returns None."""
 
-    def __init__(self, context=None, error=None):
-        self._context = context
-        self._error = error
-
-    async def execute(self, state):
-        if self._error:
-            state.errors.append(self._error)
-        if self._context:
-            state.trip_context = self._context
+    async def _resolve(state):
+        if error:
+            state.errors.append(error)
+        if context:
+            state.trip_context = context
             state.weather = {"forecast": []}
             state.disaster = {"safe": True, "active_events": []}
-        return _FakeAgentResult(success=self._context is not None)
+
+    return _resolve
 
 
 class _FakeRecommendationAgent:
@@ -96,11 +129,14 @@ class _FakeFallbackResult:
         self.plan_source = "fallback"
 
 
-def _patch_agents(monkeypatch, *, fill_slots_fn=_passthrough, orchestrator_agent=None,
+def _patch_agents(monkeypatch, *, fill_slots_fn=_passthrough, context_resolver=None,
                    recommendation_agent=None, planner_agent=None, validation_ok=True):
     monkeypatch.setattr(orchestrator_module, "fill_slots", AsyncMock(side_effect=fill_slots_fn))
-    monkeypatch.setattr(orchestrator_module, "OrchestratorAgent",
-                         lambda: orchestrator_agent or _FakeOrchestratorAgent(context={"destination_name": "Kandy", "district_id": "d1", "lat": 7.29, "lon": 80.63}))
+    monkeypatch.setattr(
+        orchestrator_module, "resolve_trip_context",
+        context_resolver or _fake_context_resolver(
+            context={"destination_name": "Kandy", "district_id": "d1", "lat": 7.29, "lon": 80.63}),
+    )
     monkeypatch.setattr(orchestrator_module, "RecommendationAgent",
                          lambda: recommendation_agent or _FakeRecommendationAgent())
     monkeypatch.setattr(orchestrator_module, "PlannerAgent",
@@ -197,12 +233,12 @@ async def test_invalid_input_short_circuits_before_policy(monkeypatch):
     assert "duration_days" in result["final_response"]
 
 
-async def test_orchestrator_agent_failure_is_advisory_not_blocking(monkeypatch):
-    # OrchestratorAgent failed to resolve anything (e.g. geocoding down) -
+async def test_context_resolution_failure_is_advisory_not_blocking(monkeypatch):
+    # resolve_trip_context failed to resolve anything (e.g. geocoding down) -
     # recommend/plan still run (unconditional edge), and _respond_node
     # surfaces the failure as a soft note rather than refusing to answer,
     # as long as SOME itinerary still came out of the fallback/plan path.
-    _patch_agents(monkeypatch, orchestrator_agent=_FakeOrchestratorAgent(error="orchestrator_failed: geocoding unavailable"))
+    _patch_agents(monkeypatch, context_resolver=_fake_context_resolver(error="orchestrator_failed: geocoding unavailable"))
 
     state = TripState(user_input="x", destination="Nowhereville", duration_days=1)
     result = await orchestrator.ainvoke(state)
@@ -314,7 +350,7 @@ async def test_empty_itinerary_with_no_destination_asks_for_one(monkeypatch):
 
 
 async def test_repair_node_degrades_when_get_llm_itself_raises(monkeypatch):
-    # Regression (Phase 8, scenario 11) - see app/agents/orchestrator_agent.py's
+    # Regression (Phase 8, scenario 11) - see app/agents/planner_agent.py's
     # identical fix. _repair_node's own get_llm("plan") call is inside its
     # try block too; a bare `except ReActError` would let this escape and
     # crash the whole request instead of falling back.

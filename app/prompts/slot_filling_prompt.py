@@ -41,11 +41,23 @@ exclusion.
 If the traveler indicates how busy they want each day to be ("relaxed",
 "take it easy", "want to see as much as possible", "packed schedule"),
 extract it as pace: relaxed, balanced, or packed. Leave pace null if
-nothing was said about it - do not default to "balanced"."""
+nothing was said about it - do not default to "balanced".
+
+If the traveler asks for a specific NUMBER of attractions/activities per
+day ("just 2 places a day", "limit it to 3 stops daily"), extract it as
+items_per_day. If instead they speak COMPARATIVELY, without naming a
+number, extract items_per_day_delta: "fewer places each day"/"too many
+stops"/"not so many stops" -> -1, "a lot fewer"/"way too many" -> -2, "add
+one more stop"/"a bit more" -> +1, "a lot more" -> +2. Never fill both
+items_per_day and items_per_day_delta for the same message - a number
+statement and a comparative statement are mutually exclusive. Leave both
+null if the traveler said nothing about density; this is distinct from
+pace ("relaxed"/"packed" are a general feel, not a request to change the
+day's count from whatever it already was)."""
 
 SLOT_FILLING_SPEC = PromptSpec(
     name="slot_filling",
-    version="1.1.0",   # bumped from the original inline prompt: added must_avoid + pace fields
+    version="1.2.0",   # Part 3: added items_per_day / items_per_day_delta
     system=SLOT_FILLING_SYSTEM_PROMPT,
     output_schema=ExtractedSlots,
 )

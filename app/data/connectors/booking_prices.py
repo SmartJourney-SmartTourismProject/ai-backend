@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
 import time
 from datetime import date, timedelta
 from typing import Any, Optional
@@ -22,7 +21,7 @@ from typing import Any, Optional
 import requests
 
 from app.config.settings import settings
-from app.data.connectors.base import District, fetch_all_districts
+from app.data.connectors.base import District, fetch_all_districts, haversine_km
 from app.data.postgres_writer import get_connection
 
 logger = logging.getLogger(__name__)
@@ -48,14 +47,6 @@ def _headers() -> dict[str, str]:
         "X-RapidAPI-Key": settings.booking_rapidapi_key,
         "X-RapidAPI-Host": settings.booking_rapidapi_host,
     }
-
-
-def _haversine_km(lat1, lon1, lat2, lon2) -> float:
-    R = 6371.0
-    dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2
-         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def _price_level_bucket(price_per_night_lkr: Optional[float]) -> Optional[int]:
@@ -183,7 +174,7 @@ class BookingPricesConnector:
         for listing_id, lat, lon in existing:
             best_dist, best_match = MATCH_RADIUS_KM, None
             for bh in raw:
-                d = _haversine_km(lat, lon, bh["lat"], bh["lon"])
+                d = haversine_km(lat, lon, bh["lat"], bh["lon"])
                 if d < best_dist:
                     best_dist, best_match = d, bh
             if best_match:

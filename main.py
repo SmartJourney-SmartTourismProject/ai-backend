@@ -4,8 +4,8 @@ FastAPI server for SmartJourney AI Backend.
 Mounts both tracks on one app:
   - Member A's Orchestrator track: trip planning (`app/api/trip.py`) and
     Google Calendar OAuth (`app/api/google_oauth.py`).
-  - Member B's data/RAG track: RAG indexing and the data-pipeline admin
-    triggers/scheduler below.
+  - Member B's data track: the data-pipeline admin triggers/scheduler below.
+    (RAG indexing was removed - see docs/AI_BACKEND_OPTIMIZATION_PLAN.md C1.)
 
 Endpoints:
   POST /trip-plan            - Orchestrator: full validate/policy/slot-fill/
@@ -14,7 +14,6 @@ Endpoints:
   GET  /auth/google/callback - Google Calendar OAuth consent flow
   GET  /                     - Health check
   GET  /api/health           - Health check (detailed)
-  POST /api/rag/index        - Index new data into the RAG store
   POST /api/admin/sync/events    - Trigger the events ingestion job
   POST /api/admin/sync/listings  - Trigger the listings ingestion job
 """
@@ -23,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from dotenv import load_dotenv
 
@@ -34,13 +33,11 @@ from dotenv import load_dotenv
 # would otherwise fail at runtime even with a correctly filled-in .env.
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from app.api.trip import router as trip_router
 from app.api.google_oauth import router as google_oauth_router
-from app.rag.rag_service import rag_service
 from app.scheduler import start_scheduler, stop_scheduler
 from app.utils.db_pool import close_pool
 from app.data import pipeline
@@ -50,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Smart Tourism Assistant — AI Backend",
-    description="Multi-agent travel planning system with RAG and LangGraph",
+    description="Multi-agent travel planning system with LangGraph",
     version="2.0.0",
 )
 
@@ -66,11 +63,6 @@ app.include_router(trip_router)
 app.include_router(google_oauth_router)
 
 
-class IndexDataRequest(BaseModel):
-    data: Dict[str, List[dict]]
-    destination: Optional[str] = None
-
-
 # ------------------- API Endpoints -------------------
 
 @app.get("/")
@@ -82,27 +74,6 @@ async def root():
 async def health_check() -> Dict[str, Any]:
     """Health check endpoint."""
     return {"status": "healthy", "version": "2.0.0"}
-
-
-@app.post("/api/rag/index")
-async def index_rag_data(request: IndexDataRequest):
-    """
-    Index candidate data into RAG store.
-    Used by daily data pipeline to refresh listings.
-    """
-    try:
-        counts = rag_service.index_candidate_data(
-            request.data,
-            destination=request.destination,
-        )
-        return {
-            "status": "success",
-            "indexed_counts": counts,
-            "total_documents": len(rag_service.retriever._stores),
-        }
-    except Exception as e:
-        logger.exception("RAG indexing failed: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"Indexing error: {str(e)}")
 
 
 def _run_pipeline_in_background(source: str) -> None:

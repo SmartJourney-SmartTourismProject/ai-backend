@@ -49,6 +49,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from app.config.settings import settings
+from app.core.llm import log_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +231,7 @@ async def run_react(
             stopped_by = "error"
             break
 
+        log_token_usage(f"{output_schema.__name__}:loop_turn_{step}", ai_msg)
         turns_used = step
         msgs.append(ai_msg)
         tool_calls = list(getattr(ai_msg, "tool_calls", None) or [])
@@ -255,7 +257,18 @@ async def run_react(
             step_trace.tool_calls.append(
                 ToolCallTrace(tool=name, args=args, observation=obs, cached=cached, error=err)
             )
-            msgs.append(ToolMessage(content=json.dumps(obs, default=str), tool_call_id=call_id))
+            # O1 (AI_BACKEND_OPTIMIZATION_PLAN.md): _trim_observation used to
+            # run only on the finalization copy below - this loop transcript
+            # was appended FULLY UNTRIMMED and resent on every subsequent
+            # turn. db_search_listings' old default limit=40, three
+            # categories, full 15-field rows: ~30-40KB of JSON re-sent per
+            # turn, the dominant cost behind the ~5,000-token measured
+            # `recommend` call. Still real data for the model to reason over
+            # (react.py's own documented intent) - only heavy free-text
+            # fields (description/photo_url/opening_hours/transit) and the
+            # item count are trimmed, not the fields any agent's rules
+            # actually reference.
+            msgs.append(ToolMessage(content=json.dumps(_trim_observation(obs), default=str), tool_call_id=call_id))
 
         trace.append(step_trace)
     else:
@@ -292,8 +305,26 @@ async def run_react(
     # call" language to fight against. Callers that don't pass one (not yet
     # updated) fall back to the older, weaker behavior of reusing `messages`
     # plus a trailing override.
+    #
+    # When finalize_system IS given, the original messages' non-system
+    # entries are still kept (only the SystemMessage itself is swapped) -
+    # added for the itinerary-quality/token-reduction pass, since the loop's
+    # ORIGINAL HumanMessage(s) (trip_context, interests, budget, a repair
+    # call's validation failures, etc.) were being silently dropped from
+    # every finalize call, not just the tool-mandating system prompt that
+    # caused the original bug. Those are plain caller-supplied HumanMessages,
+    # never the AIMessage/ToolMessage turns the loop itself generates (msgs,
+    # not messages) - it's exactly that interleaved tool-call transcript that
+    # caused the "model prefilling"/undeclared-function 400s this parameter
+    # exists to avoid, and this change doesn't reintroduce it. This also
+    # keeps the caller's per-request payload as ordinary human turns AFTER a
+    # now genuinely request-invariant system message, which is what makes
+    # provider-side prompt caching (Groq/Gemini both cache on an identical
+    # system+tools prefix) actually possible for repair - see
+    # app/prompts/repair_prompt.py.
     if finalize_system is not None:
         finalize_msgs: list[BaseMessage] = [SystemMessage(content=finalize_system)]
+        finalize_msgs.extend(m for m in messages if not isinstance(m, SystemMessage))
     else:
         finalize_msgs = list(messages)
     if observations:
@@ -315,14 +346,38 @@ async def run_react(
         # Forcing json_schema mode (Groq's native structured-output path,
         # and already Gemini's own default, so this is a no-op there)
         # fixed it cleanly on every retry that wasn't just rate-limited.
-        structured_llm = llm.with_structured_output(output_schema, method="json_schema")
-        output = await structured_llm.ainvoke(finalize_msgs)
+        # include_raw=True (O5, AI_BACKEND_OPTIMIZATION_PLAN.md): this
+        # finalize call is the single biggest token cost per site (the
+        # observations summary lives here) and previously had NO visibility
+        # into what it actually spent - with_structured_output() normally
+        # discards the raw AIMessage (and its token usage) once it parses
+        # the answer out of it. A real provider returns
+        # {"raw": AIMessage, "parsed": output_schema|None, "parsing_error": ...}
+        # with include_raw=True; a test double (or a future provider that
+        # doesn't support the kwarg) may still just hand back the parsed
+        # answer directly, which the isinstance check below falls back to
+        # handling exactly as before.
+        structured_llm = llm.with_structured_output(output_schema, method="json_schema", include_raw=True)
+        raw_result = await structured_llm.ainvoke(finalize_msgs)
     except Exception as e:
         raise ReActError(
             f"run_react could not produce a structured {output_schema.__name__} "
             f"even after the no-tools fallback (loop stopped_by={stopped_by}): {e}",
             trace=trace, tools_used=tools_used, stopped_by=stopped_by,
         ) from e
+
+    if isinstance(raw_result, dict) and "parsed" in raw_result:
+        output = raw_result.get("parsed")
+        parsing_error = raw_result.get("parsing_error")
+        if output is None or parsing_error is not None:
+            raise ReActError(
+                f"run_react's finalize call for {output_schema.__name__} failed to parse "
+                f"(loop stopped_by={stopped_by}): {parsing_error}",
+                trace=trace, tools_used=tools_used, stopped_by=stopped_by,
+            )
+        log_token_usage(f"{output_schema.__name__}:finalize", raw_result.get("raw"))
+    else:
+        output = raw_result
 
     return ReActResult(
         output=output, trace=trace, steps_used=turns_used,

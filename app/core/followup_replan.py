@@ -23,16 +23,16 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from app.core.budget import CostReferenceTable, estimate_item_cost
+from app.core.budget import CostReferenceTable, check_budget, compose_budget_notes, cost_lookup_for, feasibility
+from app.core.clustering import partition_by_geography
 from app.core.itinerary import DayConstraints, DaySelections, build_day_plan
+from app.core.planner_shared import resolve_items_per_day
 from app.core.scoring import ScoringContext, TravelMatrix, rank
 from app.core.state import TripState
 from app.tools.db_tool import DataUnavailable, search_listings_by_district
 from app.utils.db_pool import get_pool
 
 logger = logging.getLogger(__name__)
-
-_PACE_ITEMS = {"relaxed": 2, "balanced": 3, "packed": 5}
 
 # When "cheaper" is requested, try this price ceiling (1-4 scale) first;
 # if hard-filtering to it wipes out every real candidate (real listing data
@@ -68,16 +68,6 @@ async def _fetch_cost_table() -> CostReferenceTable:
     except Exception as e:
         logger.warning(f"followup_replan: cost_reference fetch failed, degrading to empty table: {e}")
     return cost_table
-
-
-def _cost_lookup_for(items: list[dict], category: str, district_id: Optional[str],
-                     cost_table: CostReferenceTable) -> dict[str, float]:
-    out = {}
-    for i in items:
-        est = estimate_item_cost(i, category, district_id, cost_table)
-        if est.value is not None:
-            out[i["id"]] = est.value
-    return out
 
 
 def _find_hotel_anchor(itinerary: list[dict]) -> Optional[dict]:
@@ -133,7 +123,7 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
 
     def _rank(observation: dict, category: str, ceiling: Optional[int]) -> list[dict]:
         items = observation.get("items") or []
-        cost_lookup = _cost_lookup_for(items, category, district_id, cost_table)
+        cost_lookup = cost_lookup_for(items, category, district_id, cost_table)
         scoring_ctx = ScoringContext(
             interests=state.interests, anchor=hotel_anchor, matrix=matrix,
             cost_estimates=cost_lookup, must_avoid=state.must_avoid, max_price_level=ceiling,
@@ -160,9 +150,9 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
     ranked_attractions = _rank(attractions_obs, "attraction", price_ceiling)
 
     all_cost_lookup = {
-        **_cost_lookup_for(ranked_hotels, "hotel", district_id, cost_table),
-        **_cost_lookup_for(ranked_restaurants, "restaurant", district_id, cost_table),
-        **_cost_lookup_for(ranked_attractions, "attraction", district_id, cost_table),
+        **cost_lookup_for(ranked_hotels, "hotel", district_id, cost_table),
+        **cost_lookup_for(ranked_restaurants, "restaurant", district_id, cost_table),
+        **cost_lookup_for(ranked_attractions, "attraction", district_id, cost_table),
     }
 
     last_day_num = max((d["day"] for d in itinerary), default=1)
@@ -182,6 +172,16 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
             elif it.get("type") == "restaurant" and it.get("listing_id"):
                 used_restaurant_ids.add(it["listing_id"])
 
+    # Geographic day clustering (itinerary-quality/token-reduction pass,
+    # same fix as app/core/fallback.py's build_plan_core) - partitioned
+    # only across the days actually being REBUILT (an untouched day keeps
+    # its existing items verbatim, so it doesn't need a cluster of its
+    # own); target_day_list's order is what maps attraction_clusters[i] to
+    # its day, so this must stay a stable sort of the target days.
+    target_day_list = sorted(target_days)
+    items_target = resolve_items_per_day(state)
+    attraction_clusters = partition_by_geography(ranked_attractions, len(target_day_list), items_target)
+
     new_days = []
     for day in itinerary:
         day_num = day.get("day")
@@ -190,10 +190,14 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
             continue
 
         day_anchor = start_anchor if day_num == 1 else hotel_anchor
-        fresh_attractions = [a for a in ranked_attractions if a["id"] not in used_attraction_ids]
+        cluster = [a for a in attraction_clusters[target_day_list.index(day_num)]
+                   if a["id"] not in used_attraction_ids]
+        cluster_ids = {a["id"] for a in cluster}
+        tail = [a for a in ranked_attractions if a["id"] not in used_attraction_ids and a["id"] not in cluster_ids]
+        fresh_attractions = cluster + tail
         fresh_restaurants = [r for r in ranked_restaurants if r["id"] not in used_restaurant_ids]
         constraints = DayConstraints(
-            items_target=_PACE_ITEMS.get(state.pace or "balanced", 3),
+            items_target=items_target,
             outdoor_tags=frozenset(),
             need_hotel_checkin=(day_num == 1 and bool(ranked_hotels)),
             need_hotel_checkout=(day_num == last_day_num and bool(ranked_hotels)),
@@ -224,7 +228,20 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
             "day_cost": plan.day_cost,
         })
 
+    # Recompute budget_notes against the REBUILT itinerary, not the carried
+    # (now-stale) one from state - a rebuild that drops a day or swaps
+    # cheaper options for "make it cheaper" genuinely changes the cost, and
+    # without this the response kept narrating the ORIGINAL plan's shortfall
+    # verbatim (see compose_budget_notes' own docstring for the live-found bug).
+    feas = feasibility(
+        ranked_hotels, ranked_restaurants, ranked_attractions,
+        len(new_days), state.budget, district_id, cost_table,
+    )
+    day_costs_for_budget_check = [{"total": d.get("day_cost", 0.0)} for d in new_days]
+    budget_check = check_budget(day_costs_for_budget_check, state.budget, feas.unknown_cost_items)
+
     state.itinerary = new_days
     state.estimated_cost = round(sum(d.get("day_cost", 0.0) for d in new_days), 2)
     state.plan_source = "fallback"   # deterministic, same label the zero-LLM planner uses
+    state.budget_notes = compose_budget_notes(feas, budget_check, state.budget)
     return state

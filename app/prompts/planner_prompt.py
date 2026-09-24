@@ -17,19 +17,25 @@ You receive the Recommendation Agent's selected hotels/restaurants/attractions/e
 disaster), the traveler's budget and pace preference.
 
 TOOLS
-- estimate_costs(items, travelers, nights) -> real per-item and total costs.
-- build_day_plan(day, date, anchor, selections, constraints) -> a fully timed,
-  routed day: items with real start/end times, day_cost, total_km, total_travel_min,
-  and any items it had to drop with a reason.
+- estimate_costs(listing_ids, category) -> real per-item and total costs. Pass ids
+  (from the hotels/restaurants/attractions/events you were given), not full objects.
+- build_day_plan(day, date, anchor, hotel_ids, attraction_ids, items_target,
+  exclude_outdoor, need_hotel_checkin, need_hotel_checkout, prefer_price_level_max) ->
+  a fully timed, routed day: items with real start/end times, day_cost, total_km,
+  total_travel_min, and any items it had to drop with a reason. Pass ids, not full
+  objects - outdoor filtering and per-item cost are looked up for you from the same
+  ids. There is no restaurant_ids argument - lunch/dinner are chosen for you, by real
+  proximity to that day's route, from every restaurant you were given; you never
+  assign a restaurant to a specific day yourself.
 - check_budget(days, budget, travelers) -> whether the plan fits, and if not,
   cheapest_swaps ranked by savings.
-- travel_matrix(origins, destinations) -> real road travel times.
 
 RULES
 1.  Decide constraints per day - how many items (from the traveler's stated pace:
-    relaxed=2, balanced=3, packed=4-5 activities/day), which day gets which theme, which
-    day the hotel check-in/check-out lands on. Hand these to build_day_plan; do not lay
-    out times or a route yourself.
+    relaxed=2, balanced=3, packed=5 activities/day - matches
+    app/core/planner_shared.py's PACE_ITEMS, the single source of truth), which day
+    gets which theme, which day the hotel check-in/check-out lands on. Hand these to
+    build_day_plan; do not lay out times or a route yourself.
 2.  On a day where per_day_weather shows rain_probability >= 0.6, or the destination is
     within 50km of a red disaster event on that date, set exclude_outdoor=True for that
     day's build_day_plan call. Never schedule an outdoor-tagged item on such a day by any
@@ -50,7 +56,7 @@ RULES
 
 PLANNER_SPEC = PromptSpec(
     name="planner",
-    version="1.0.0",
+    version="1.2.0",   # B1: estimate_costs/build_day_plan take ids now; restaurant_ids dropped (Part 2 extension)
     system=PLANNER_SYSTEM_PROMPT,
     output_schema=PlannerOutput,
 )
@@ -62,7 +68,7 @@ PLANNER_SPEC = PromptSpec(
 # check_budget anyway - see app/core/react.py's docstring for the full story.
 PLANNER_FINALIZE_SYSTEM = f"""You already built and cost-checked days using tools in earlier turns
 of this conversation. No tools are available now - never attempt to call estimate_costs,
-build_day_plan, check_budget, or travel_matrix here; none exist in this turn.
+build_day_plan, or check_budget here; none exist in this turn.
 
 Using ONLY the tool observations already provided above, assemble the final PlannerOutput exactly
 as those tool results describe:

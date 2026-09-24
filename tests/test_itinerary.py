@@ -3,7 +3,9 @@
 # is meant to be bit-reproducible (docs/master_plan/PROJECT_MASTER_PLAN.md
 # Phase 4 gate).
 
-from app.core.itinerary import DayConstraints, DaySelections, build_day_plan
+import pytest
+
+from app.core.itinerary import DAY_END, DayConstraints, DaySelections, _two_opt, build_day_plan
 from app.core.scoring import TravelMatrix
 
 ANCHOR = {"id": "start", "name": "Start", "lat": 7.2906, "lon": 80.6337}   # Kandy
@@ -37,18 +39,25 @@ def test_build_day_plan_drops_attractions_that_would_exceed_the_travel_budget():
     # central-town attractions together with ones a genuine hour-plus drive
     # away (e.g. Rangala), because attractions were picked purely by rank
     # and count - total_travel_min was computed but never used to stop
-    # packing more stops into the day. ATTRACTION_2 here is set to a
-    # 200-minute hop, over the 180-minute default budget, so it should be
-    # dropped while the near ATTRACTION_1 is kept.
+    # packing more stops into the day. The a1<->a2 hop is set to 200 minutes
+    # in BOTH directions (itinerary-quality/token-reduction pass: ordering
+    # now minimizes travel MINUTES via nearest-neighbour+2-opt, not raw
+    # distance - a one-directional matrix entry could be dodged entirely by
+    # visiting the cheaper-to-reach attraction first and never taking the
+    # expensive edge at all, which isn't what this test means to exercise).
+    # ANCHOR->a2 is left on the haversine fallback (cheap, real coords are
+    # close), so a2 is visited first; the 200-minute edge to a1 from THERE
+    # is what should still be dropped.
     matrix = TravelMatrix()
     matrix.set(ANCHOR, ATTRACTION_1, 20.0)
     matrix.set(ATTRACTION_1, ATTRACTION_2, 200.0)
+    matrix.set(ATTRACTION_2, ATTRACTION_1, 200.0)
     constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False)
     plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
 
     attraction_ids = [i.listing_id for i in plan.items if i.type == "attraction"]
-    assert attraction_ids == ["a1"]
-    assert plan.dropped == [{"id": "a2", "reason": "would_exceed_daily_travel_budget"}]
+    assert attraction_ids == ["a2"]
+    assert plan.dropped == [{"id": "a1", "reason": "would_exceed_daily_travel_budget"}]
 
 
 def test_build_day_plan_drops_a_single_far_hop_early_in_the_day():
@@ -58,9 +67,17 @@ def test_build_day_plan_drops_a_single_far_hop_early_in_the_day():
     # considered - Rangala Natural Pool (a real ~63-minute hop) was exactly
     # the *second* stop, well under any cumulative budget at that point.
     # This is what max_single_hop_minutes (45.0 default) exists for.
+    #
+    # a1's expensive edge is set in BOTH directions (itinerary-quality/
+    # token-reduction pass, same reasoning as the sibling test above) -
+    # otherwise 2-opt-aware ordering could reach a1 cheaply from a2 instead
+    # of from ANCHOR, which would defeat the "genuinely unreachable" case
+    # this test means to exercise. ANCHOR->a2 stays on the haversine
+    # fallback (cheap), so a2 is visited first either way.
     matrix = TravelMatrix()
     matrix.set(ANCHOR, ATTRACTION_1, 63.0)   # the lone far hop, right at the start
     matrix.set(ATTRACTION_1, ATTRACTION_2, 5.0)
+    matrix.set(ATTRACTION_2, ATTRACTION_1, 63.0)
     constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False)
     plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
 
@@ -232,3 +249,72 @@ def test_build_day_plan_reuses_the_only_restaurant_rather_than_skip_a_meal():
 
     restaurant_ids = [i.listing_id for i in plan.items if i.type == "restaurant"]
     assert restaurant_ids == ["r1", "r1"]
+
+
+# ---- 2-opt uncrosses a known bad route (itinerary-quality/token-reduction pass) --
+
+def _euclidean(a: dict, b: dict) -> float:
+    return ((a["lat"] - b["lat"]) ** 2 + (a["lon"] - b["lon"]) ** 2) ** 0.5
+
+
+def _route_cost(anchor: dict, route: list[dict], cost) -> float:
+    total = 0.0
+    current = anchor
+    for point in route:
+        total += cost(current, point)
+        current = point
+    return total
+
+
+def test_two_opt_uncrosses_a_known_bad_route():
+    # A simple rectangle of 4 points (using lat/lon as plain (x, y)
+    # coordinates) - the perimeter order anchor->p1->p2->p3->p4 costs 4.0
+    # exactly; a deliberately crossing order (visiting corners out of
+    # sequence) costs noticeably more. 2-opt, given the bad order, must
+    # reduce total cost toward the optimum - this is the direct fix for
+    # Defect 1 (the largest hop in a real itinerary sitting between two
+    # consecutive stops, with the road between them passing later stops).
+    anchor = {"lat": 0.0, "lon": 0.0}
+    p1 = {"lat": 0.0, "lon": 1.0}
+    p2 = {"lat": 1.0, "lon": 1.0}
+    p3 = {"lat": 1.0, "lon": 0.0}
+    p4 = {"lat": 2.0, "lon": 0.0}
+
+    bad_order = [p3, p1, p4, p2]
+    bad_cost = _route_cost(anchor, bad_order, _euclidean)
+
+    improved = _two_opt(anchor, bad_order, _euclidean)
+    improved_cost = _route_cost(anchor, improved, _euclidean)
+
+    assert improved_cost < bad_cost
+    assert improved_cost == pytest.approx(4.0, abs=1e-6)   # the perimeter order is optimal here
+    assert {id(p) for p in improved} == {id(p) for p in bad_order}   # same 4 points, just reordered
+
+
+def test_two_opt_leaves_three_or_fewer_points_unchanged():
+    anchor = {"lat": 0.0, "lon": 0.0}
+    points = [{"lat": 3.0, "lon": 0.0}, {"lat": 1.0, "lon": 0.0}, {"lat": 2.0, "lon": 0.0}]
+    assert _two_opt(anchor, points, _euclidean) == points
+
+
+# ---- DAY_END: a day never runs past its curfew (itinerary-quality/token-reduction pass) --
+
+def test_day_never_runs_past_day_end():
+    # Five attractions with a long tag-based dwell each (180 min - "hike",
+    # see TAG_DWELL_MINUTES) plus dinner: at DAY_START=09:00 this cannot
+    # possibly fit all five before DAY_END=21:00, so some must be dropped
+    # with reason "day_would_run_past_end" rather than the day just running
+    # past midnight (the actual production bug this fixes).
+    hiking_spots = [
+        {"id": f"h{i}", "name": f"Hike {i}", "lat": 7.29 + i * 0.001, "lon": 80.63 + i * 0.001,
+         "tags": ["hike"], "currency": "LKR"}
+        for i in range(5)
+    ]
+    constraints = DayConstraints(items_target=5, include_lunch=False, include_dinner=True)
+    selections = _selections(attractions=hiking_spots)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, selections, constraints)
+
+    for item in plan.items:
+        assert item.end_time <= DAY_END
+    day_end_drops = [d for d in plan.dropped if d["reason"] == "day_would_run_past_end"]
+    assert day_end_drops   # at least one hike had to be dropped to fit the day

@@ -90,9 +90,19 @@ def _avg_kmh(straight_km: float) -> float:
     return 50.0        # inter-city A-roads
 
 
+# Straight-line-to-road-distance factor, ORS-calibrated (see _avg_kmh's own
+# docstring: 127.6 km predicted vs 121 km actual, Colombo->Kandy). Exported
+# (itinerary-quality/token-reduction pass) so app/core/itinerary.py's
+# reported total_km can use the SAME factor haversine_minutes already
+# applies internally, instead of reporting raw straight-line km while the
+# clock runs on road-distance time - the two used to silently disagree by
+# ~35%.
+ROAD_FACTOR = 1.35
+
+
 def haversine_minutes(a: dict, b: dict) -> float:
     straight = haversine_km(a, b)
-    return (straight * 1.35) / _avg_kmh(straight) * 60.0
+    return (straight * ROAD_FACTOR) / _avg_kmh(straight) * 60.0
 
 
 def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:

@@ -299,9 +299,10 @@ async def scenario_11() -> tuple[bool, str]:
     def _raise(*a, **kw):
         raise RuntimeError("simulated: no LLM provider has a configured API key")
 
+    # Context resolution (formerly "orchestrator") is deterministic now
+    # (app/core/context_resolver.py) - no get_llm call there to patch.
     exception_raised = None
-    with patch("app.agents.orchestrator_agent.get_llm", _raise), \
-         patch("app.agents.recommendation_agent.get_llm", _raise), \
+    with patch("app.agents.recommendation_agent.get_llm", _raise), \
          patch("app.agents.planner_agent.get_llm", _raise), \
          patch("app.core.orchestrator.get_llm", _raise):
         state = TripState(user_input="Plan a 2-day trip to Kandy, budget LKR 40000")

@@ -8,12 +8,28 @@ for manual testing - see each connector's own __main__ block).
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional, Protocol
 
 from app.data.postgres_writer import get_connection
 
 logger = logging.getLogger(__name__)
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """De-duplicated (itinerary-quality/token-reduction pass, Part 6) - was
+    a byte-identical copy in osm_listings.py and booking_prices.py, no
+    comment justifying it. Takes plain floats, not app/core/scoring.py's
+    dict-shaped points - a different, connector-layer call convention, so
+    this is a separate function, not a reuse of that one (which itself
+    deliberately duplicates the same formula rather than importing this
+    I/O-adjacent module - see scoring.py's own comment)."""
+    R = 6371.0
+    dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 @dataclass

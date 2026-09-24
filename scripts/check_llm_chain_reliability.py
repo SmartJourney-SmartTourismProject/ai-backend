@@ -95,7 +95,8 @@ async def main() -> int:
     for spec in specs:
         client = _build_client(spec)
         try:
-            result: RecommendationOutput = await client.with_structured_output(RecommendationOutput).ainvoke(messages)
+            structured = client.with_structured_output(RecommendationOutput, method="json_schema")
+            result: RecommendationOutput = await structured.ainvoke(messages)
             print(f"{spec:35s} OK   hotels={len(result.hotels)} restaurants={len(result.restaurants)} "
                   f"attractions={len(result.attractions)}")
             any_ok = True

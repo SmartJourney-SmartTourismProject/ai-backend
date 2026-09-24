@@ -6,10 +6,20 @@ One nightly pipeline job, not one job per connector - each connector
 carries its own cadence (data_source.cadence) and pipeline.py's --due-only
 flag skips anything that hasn't reached its interval yet
 (docs/master_plan/DATA_PLATFORM.md §5.4). This replaced the old two-job
-design (weekly events, monthly listings) once ticketmaster_events actually
-became daily-cadence and osm_listings/booking_prices/foursquare_enrich all
+design (weekly events, monthly listings) once osm_listings/booking_prices
 became weekly - a per-connector cron entry would have needed editing every
-time a cadence changed; --due-only doesn't.
+time a cadence changed; --due-only doesn't. ticketmaster_events is now
+cadence="manual" (AI_BACKEND_OPTIMIZATION_PLAN.md C5 - local_event has 0
+rows, so this sweep no longer burns API quota running it automatically);
+trigger it explicitly via POST /api/admin/sync/events instead.
+wikidata_enrich is CLI-only, deliberately - not registered in pipeline.py's
+_load_registry(), so this scheduler never runs it automatically; it's a
+real, actively-maintained manual admin tool (not dead code - it's what
+produced the real attraction photo/description backfill), just one whose
+`--category`-scoped sweep is too slow/API-heavy to run unattended every
+night. foursquare_enrich was deleted (itinerary-quality/token-reduction
+pass, Part 6) - unlike wikidata_enrich, it had no real usage history
+(a single "adjustments" commit) to justify keeping it.
 
 Also runs the two housekeeping jobs the plan calls for: expiring old
 ai_session rows and pruning the travel_time cache.

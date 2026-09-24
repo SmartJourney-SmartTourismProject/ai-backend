@@ -1,6 +1,7 @@
 # app/utils/slot_filling.py
 from app.core.followup import classify_followup
 from app.core.llm import get_llm
+from app.core.planner_shared import resolve_items_per_day
 from app.core.state import TripState
 from app.models.schemas import ExtractedSlots
 from app.prompts import get_prompt
@@ -65,6 +66,20 @@ async def fill_slots(state: TripState) -> TripState:
                 state.must_avoid = result.must_avoid
             if result.pace:
                 state.pace = result.pace
+            # Part 3: an absolute count always wins outright; a comparative
+            # delta is resolved against whatever items_per_day would
+            # currently be (an earlier explicit override, or pace-derived)
+            # - clamped to schemas.py's own [1, 8] bound so repeated
+            # "fewer" requests can't decrement below a real minimum.
+            # Applied HERE (not deferred to followup_replan.py) so it takes
+            # effect regardless of whether this turn ends up routed
+            # shape_only or full - a follow-up that also changes something
+            # else (destination, dates) must not silently drop this.
+            if result.items_per_day:
+                state.items_per_day = result.items_per_day
+            elif result.items_per_day_delta:
+                current = resolve_items_per_day(state)
+                state.items_per_day = max(1, min(8, current + result.items_per_day_delta))
         else:
             if state.destination is None and result.destination:
                 state.destination = result.destination
@@ -80,6 +95,10 @@ async def fill_slots(state: TripState) -> TripState:
                 state.must_avoid = result.must_avoid
             if state.pace is None and result.pace:
                 state.pace = result.pace
+            # No delta handling on a first turn - "fewer" has nothing to be
+            # relative TO yet. An exact count is still meaningful, though.
+            if state.items_per_day is None and result.items_per_day:
+                state.items_per_day = result.items_per_day
 
         # A named origin only matters when we don't already have a real
         # start_location - GPS/IP resolution (done by the API layer before

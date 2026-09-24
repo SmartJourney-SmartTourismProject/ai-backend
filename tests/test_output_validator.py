@@ -87,6 +87,20 @@ def test_days_not_sequential_fails():
     assert any("days_sequential" in f for f in result.failures)
 
 
+def test_empty_day_items_fails():
+    # Live-found regression: A1 dropped ItineraryDay.items' schema-level
+    # min_length=1 (moved the constraint to L2, where business rules
+    # belong per A1's own reasoning) - a real repair call was observed
+    # producing items=[] with a nonzero day_cost carried over from the
+    # previous attempt, and every other L1/L2 rule passed it vacuously.
+    # ItineraryDay constructed directly (not via _day()) - that helper's
+    # `items or [_item()]` default would silently replace an empty list.
+    plan = _plan(days=[ItineraryDay(day=1, date="2026-10-01", items=[], day_cost=1000.0)])
+    result = validate(plan, _ctx())
+    assert result.ok is False
+    assert any("days_have_items" in f for f in result.failures)
+
+
 # ---- L2: duplicates / times -------------------------------------------------
 
 def test_duplicate_listing_in_same_day_fails():
@@ -231,6 +245,82 @@ def test_must_avoid_catches_a_forbidden_listing():
 def test_currency_check_passes_for_lkr():
     result = validate(_plan(), _ctx())
     assert not any("currency" in f for f in result.failures)
+
+
+# ---- Part 4 (guardrails): route/feasibility checks on the LLM planner's own output --
+
+def test_day_ends_by_curfew_catches_a_day_running_past_it():
+    plan = _plan(days=[_day(items=[_item(time="20:00", end_time="22:00")])])
+    result = validate(plan, _ctx(day_end="21:00"))
+    assert any("day_ends_by_curfew" in f for f in result.failures)
+
+
+def test_day_ends_by_curfew_passes_within_the_curfew():
+    plan = _plan(days=[_day(items=[_item(time="19:00", end_time="20:30")])])
+    result = validate(plan, _ctx(day_end="21:00"))
+    assert not any("day_ends_by_curfew" in f for f in result.failures)
+
+
+def test_day_ends_by_curfew_passes_when_absent_from_context():
+    plan = _plan(days=[_day(items=[_item(time="20:00", end_time="23:59")])])
+    result = validate(plan, _ctx())   # day_end not set
+    assert not any("day_ends_by_curfew" in f for f in result.failures)
+
+
+def test_no_absurd_hop_catches_a_far_consecutive_pair():
+    # Kandy-ish to a point ~500km away - a hop no single-day cap should allow.
+    plan = _plan(days=[_day(items=[
+        _item(listing_id=VALID_UUID_1, time="09:00", end_time="10:00", lat=7.29, lon=80.63),
+        _item(listing_id=VALID_UUID_2, time="10:15", end_time="11:00", lat=9.66, lon=80.02),
+    ])])
+    result = validate(plan, _ctx(max_single_hop_minutes=45.0))
+    assert any("no_absurd_hop" in f for f in result.failures)
+
+
+def test_no_absurd_hop_passes_for_nearby_consecutive_stops():
+    plan = _plan(days=[_day(items=[
+        _item(listing_id=VALID_UUID_1, time="09:00", end_time="10:00", lat=7.29, lon=80.63),
+        _item(listing_id=VALID_UUID_2, time="10:15", end_time="11:00", lat=7.291, lon=80.631),
+    ])])
+    result = validate(plan, _ctx(max_single_hop_minutes=45.0))
+    assert not any("no_absurd_hop" in f for f in result.failures)
+
+
+def test_no_absurd_hop_passes_when_absent_from_context():
+    plan = _plan(days=[_day(items=[
+        _item(listing_id=VALID_UUID_1, time="09:00", end_time="10:00", lat=7.29, lon=80.63),
+        _item(listing_id=VALID_UUID_2, time="10:15", end_time="11:00", lat=9.66, lon=80.02),
+    ])])
+    result = validate(plan, _ctx())   # max_single_hop_minutes not set
+    assert not any("no_absurd_hop" in f for f in result.failures)
+
+
+def test_items_per_day_respected_catches_too_many_attractions():
+    plan = _plan(days=[_day(items=[
+        _item(listing_id=VALID_UUID_1, time="09:00", end_time="10:00"),
+        _item(listing_id=VALID_UUID_2, time="10:15", end_time="11:00"),
+        _item(listing_id=VALID_UUID_3, time="11:15", end_time="12:00"),
+    ])])
+    result = validate(plan, _ctx(expected_items_per_day=2))
+    assert any("items_per_day_respected" in f for f in result.failures)
+
+
+def test_items_per_day_respected_allows_fewer_than_requested():
+    # A day legitimately thinned by weather/price/feasibility drops is not
+    # a violation - only exceeding the count is.
+    plan = _plan(days=[_day(items=[_item()])])
+    result = validate(plan, _ctx(expected_items_per_day=3))
+    assert not any("items_per_day_respected" in f for f in result.failures)
+
+
+def test_items_per_day_respected_passes_when_absent_from_context():
+    plan = _plan(days=[_day(items=[
+        _item(listing_id=VALID_UUID_1, time="09:00", end_time="10:00"),
+        _item(listing_id=VALID_UUID_2, time="10:15", end_time="11:00"),
+        _item(listing_id=VALID_UUID_3, time="11:15", end_time="12:00"),
+    ])])
+    result = validate(plan, _ctx())   # expected_items_per_day not set
+    assert not any("items_per_day_respected" in f for f in result.failures)
 
 
 # ---- multiple failures reported together --------------------------------------

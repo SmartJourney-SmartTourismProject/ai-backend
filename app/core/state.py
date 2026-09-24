@@ -46,12 +46,13 @@ class TripState(BaseModel):
     # PlanningContext (wired in app/core/orchestrator.py's `_fallback_node`).
     must_avoid: List[str] = Field(default_factory=list)
     pace: Optional[str] = None   # "relaxed" | "balanced" | "packed"
-
-    # Retrieved data (raw RAG/API candidates, pre-ranking)
-    candidate_attractions: List[dict] = Field(default_factory=list)
-    candidate_hotels: List[dict] = Field(default_factory=list)
-    candidate_restaurants: List[dict] = Field(default_factory=list)
-    candidate_events: List[dict] = Field(default_factory=list)
+    # Explicit override for app/core/planner_shared.py's resolve_items_per_day() -
+    # set by a follow-up like "fewer destinations per day" (app/core/followup.py),
+    # which pace's 3-value enum can't express on its own. None means "derive
+    # from pace" (the pre-existing behavior). Carried across turns
+    # (app/utils/session_store.py's _CARRY_OVER_FIELDS) so a decrement compounds
+    # instead of resetting every turn.
+    items_per_day: Optional[int] = None
 
     # External context
     weather: Optional[dict] = None

@@ -18,8 +18,9 @@ from app.core.result import AgentResult
 from app.core.state import TripState
 from app.models.schemas import RecommendationOutput
 from app.prompts import get_prompt
+from app.prompts._base import enforce_max_input_chars
 from app.prompts.recommendation_prompt import RECOMMENDATION_FINALIZE_SYSTEM
-from app.tools.registry import DATA_TOOLS
+from app.tools.registry import build_data_tools
 
 logger = logging.getLogger(__name__)
 
@@ -84,18 +85,20 @@ class RecommendationAgent(BaseAgent):
             "duration_days": state.duration_days,
             "raw_message": state.user_input,
         })
+        human = enforce_max_input_chars(spec, human)
         messages = [SystemMessage(content=spec.system), HumanMessage(content=human)]
+        tools, _item_store = build_data_tools()
 
         try:
             result = await run_react(
-                llm=get_llm("recommend"), tools=DATA_TOOLS, messages=messages,
+                llm=get_llm("recommend"), tools=tools, messages=messages,
                 output_schema=RecommendationOutput, config=ReActConfig(),
                 finalize_system=RECOMMENDATION_FINALIZE_SYSTEM,
             )
         except Exception as e:
             # Catches ReActError (run_react's own failure) AND anything
             # get_llm() itself can raise (no provider configured) - see
-            # orchestrator_agent.py's identical fix for why a bare
+            # planner_agent.py's identical fix for why a bare
             # `except ReActError` was a real crash-the-request bug (Phase 8,
             # scenario 11). getattr(..., "trace", []) rather than e.trace
             # directly: a plain Exception (e.g. from get_llm()) has no

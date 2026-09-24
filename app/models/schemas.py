@@ -79,6 +79,34 @@ class ExtractedSlots(BaseModel):
             "do not default to 'balanced' just because none was mentioned."
         )
     )
+    # Part 3 (itinerary-quality/token-reduction pass) - pace's 3-value enum
+    # cannot express "one fewer than before", which is exactly what a
+    # follow-up like "reduce the destinations per day" is asking for. These
+    # two fields exist so that request has somewhere to go at all: an
+    # ABSOLUTE count when the traveler states one directly ("just 2 places
+    # a day"), or a RELATIVE delta when they say it comparatively
+    # ("fewer"/"add one more") without a previous count to compare from in
+    # this message alone - app/core/state.py's TripState.items_per_day is
+    # what actually persists the resolved value across turns.
+    items_per_day: Optional[int] = Field(
+        None, ge=1, le=8,
+        description=(
+            "An EXACT number of attractions/activities per day, only if the traveler "
+            "stated one directly (e.g. 'just 2 places a day', 'limit it to 3 stops "
+            "daily'). Null if they spoke comparatively ('fewer', 'a bit more') instead "
+            "of naming a number - use items_per_day_delta for that."
+        ),
+    )
+    items_per_day_delta: Optional[int] = Field(
+        None, ge=-3, le=3,
+        description=(
+            "A RELATIVE change to the number of attractions/activities per day, only "
+            "if the traveler asked comparatively without naming an exact number - "
+            "'fewer places each day'/'too many stops' = -1, 'a lot fewer' = -2, 'add "
+            "one more stop' = +1. Null if not mentioned, or if they gave an exact "
+            "number instead (use items_per_day for that)."
+        ),
+    )
 
 
 # ─────────────────────────── orchestrator (Phase 6 target) ─────────────────
@@ -137,20 +165,29 @@ class TripContext(BaseModel):
 
 
 # ─────────────────────────── recommendation (Phase 6 target) ───────────────
-
-_UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+# listing_id/time/date/lat/lon pattern and range constraints were dropped from
+# every schema below (AI_BACKEND_OPTIMIZATION_PLAN.md / itinerary quality plan,
+# "A1") - Gemini's structured-output schema translation was reproducibly
+# rejecting RecommendationOutput/PlannerOutput with a bare 400 INVALID_ARGUMENT
+# on a fresh account/key (so not quota), and upstream reports describe the same
+# failure shape for nested arrays with multiple constrained bounds. Nothing is
+# lost: output_validator.py's L1 validate_referential already proves every
+# listing_id came from a real tool observation (stronger than a UUID regex),
+# and geo_in_country/dates_in_window (L2) already enforce the Sri Lanka bbox
+# and real trip dates - constraints belong there now, not in the schema that
+# has to survive provider-side structured decoding.
 
 
 class Selection(BaseModel):
-    listing_id: str = Field(pattern=_UUID_PATTERN)
+    listing_id: str
     category: Literal["hotel", "restaurant", "attraction", "event"]
-    rank: int = Field(ge=1, le=50)
-    score: float = Field(ge=0.0, le=1.0)
+    rank: int
+    score: float
     reason: str = Field(max_length=200)
 
 
 class DroppedItem(BaseModel):
-    listing_id: str = Field(pattern=_UUID_PATTERN)
+    listing_id: str
     reason_code: Literal["closed_on_trip_dates", "violates_must_avoid", "duplicate_of", "unsafe_area"]
 
 
@@ -160,10 +197,10 @@ class RecommendationOutput(BaseModel):
     db_search_* observation, ordering must be score_candidates' own, and
     `reason` may only quote the score breakdown, never invent a number."""
 
-    hotels: list[Selection] = Field(max_length=3)
-    restaurants: list[Selection] = Field(max_length=30)     # capped generously; real cap (2 x duration_days) is a business rule, not a fixed schema bound
-    attractions: list[Selection] = Field(max_length=45)      # 3 x duration_days at the 30-day max
-    events: list[Selection] = Field(max_length=5)
+    hotels: list[Selection] = Field(default_factory=list)
+    restaurants: list[Selection] = Field(default_factory=list)
+    attractions: list[Selection] = Field(default_factory=list)
+    events: list[Selection] = Field(default_factory=list)
     dropped: list[DroppedItem] = Field(default_factory=list)
     coverage_notes: list[str] = Field(default_factory=list)
 
@@ -172,32 +209,44 @@ class RecommendationOutput(BaseModel):
 
 
 class ItineraryItem(BaseModel):
-    time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
-    end_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    time: str
+    end_time: str
     type: Literal["hotel", "restaurant", "attraction", "event", "travel"]
-    listing_id: Optional[str] = Field(None, pattern=_UUID_PATTERN)   # None only for type="travel"
+    listing_id: Optional[str] = None   # None only for type="travel"
     name: str
-    lat: float = Field(ge=5.85, le=9.95)      # Sri Lanka's real latitude bounds - see L2 geo_in_country
-    lon: float = Field(ge=79.5, le=82.0)      # Sri Lanka's real longitude bounds
-    est_cost: float = Field(ge=0.0)
+    lat: float                                # bounds enforced by L2 geo_in_country, not the schema
+    lon: float
+    est_cost: float
     currency: Literal["LKR"] = "LKR"
     notes: str = Field(default="", max_length=200)
 
 
 class ItineraryDay(BaseModel):
-    day: int = Field(ge=1, le=30)
-    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    day: int
+    date: str
     theme: str = Field(default="", max_length=60)
-    items: list[ItineraryItem] = Field(min_length=1, max_length=12)
-    day_cost: float = Field(ge=0.0)
+    items: list[ItineraryItem] = Field(default_factory=list)
+    day_cost: float
 
 
 class PlannerOutput(BaseModel):
-    itinerary: list[ItineraryDay] = Field(min_length=1, max_length=30)
-    estimated_cost: float = Field(ge=0.0)
+    itinerary: list[ItineraryDay] = Field(default_factory=list)
+    estimated_cost: float
     currency: Literal["LKR"] = "LKR"
     budget_notes: Optional[str] = Field(None, max_length=500)
-    plan_source: Literal["llm"] = "llm"   # the fallback planner sets "fallback" itself, never via this schema
+    # plan_source was a Literal["llm"]="llm" field here - live-found
+    # (itinerary-quality/token-reduction pass) that it broke structured
+    # output on almost every real run: `output.plan_source` is never read
+    # anywhere (grep confirmed) - app/agents/planner_agent.py always
+    # hardcodes state.plan_source = "llm" itself, exactly like the fallback
+    # planner hardcodes "fallback" (see fallback.py's FallbackPlanResult,
+    # which never asked an LLM for this at all). But the model consistently
+    # wrote something else instead of the fixed literal - "tool_observations",
+    # "tool_plan" - both observed live, both a bare pydantic
+    # literal_error that failed the ENTIRE structured-output call (and then
+    # the one repair attempt too, on the same field) for a field nothing
+    # downstream ever consumed. Removed entirely rather than "fixed the
+    # prompt" - there was never a reason to ask the model for a constant.
 
 
 # ─────────────────────────── repair (Phase 6 target) ───────────────────────

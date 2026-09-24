@@ -38,11 +38,6 @@ def _chain_specs(purpose: str) -> list[str]:
     return [_spec_of(llm)]   # no fallbacks configured - a single model
 
 
-def test_default_chain_order_is_gemini_first_for_orchestrator():
-    specs = _chain_specs("orchestrator")
-    assert specs[0].startswith("gemini:")
-
-
 def test_recommend_purpose_tries_groq_first(monkeypatch):
     # Live-confirmed 2026-09-03 (see settings.py's own comment): Gemini
     # reliably fails RecommendationOutput's schema regardless of API key -
@@ -59,27 +54,13 @@ def test_plan_purpose_tries_groq_first(monkeypatch):
     assert specs[0].startswith("groq:")
 
 
-def test_orchestrator_purpose_keeps_gemini_first_under_the_shipped_default():
-    # orchestrator's simpler TripContext schema works fine with Gemini
-    # (live-verified separately) - the shipped default
-    # ("recommend,plan") deliberately excludes it, so it must never get
-    # swept into the groq-first reorder.
-    specs = _chain_specs("orchestrator")
-    assert specs[0].startswith("gemini:")
-
-
-def test_orchestrator_purpose_can_still_be_opted_into_the_reorder(monkeypatch):
-    # The reorder logic itself is purpose-name-driven, not hardcoded to
-    # exclude "orchestrator" - proves that's a deliberate default setting
-    # choice, not something the code silently ignores if reconfigured.
-    # (llm_model_orchestrator's own gemini override is unset by default in
-    # tests, so this purely exercises the reorder logic in isolation.)
-    monkeypatch.setattr(settings, "llm_provider_chain_groq_first_purposes", "orchestrator")
-    specs = _chain_specs("orchestrator")
-    assert specs[0].startswith("groq:")
-
-
-def test_groq_first_reorder_preserves_relative_order_within_each_group():
+def test_groq_first_reorder_preserves_relative_order_within_each_group(monkeypatch):
+    # The setting's own default is now "" (empty) - Gemini's schema-400 that
+    # justified Groq-first for recommend/plan was fixed at the schema level
+    # instead (app/models/schemas.py, see settings.py's own comment), so this
+    # test sets the setting explicitly rather than relying on the old
+    # default, to keep testing the reorder MECHANISM independent of that.
+    monkeypatch.setattr(settings, "llm_provider_chain_groq_first_purposes", "recommend,plan")
     specs = _chain_specs("recommend")
     groq_specs = [s for s in specs if s.startswith("groq:")]
     other_specs = [s for s in specs if not s.startswith("groq:")]

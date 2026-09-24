@@ -63,11 +63,6 @@ def get_district_id_map() -> dict[str, str]:
     return _fetch_id_map("district")
 
 
-def get_category_id_map() -> dict[str, str]:
-    """Returns {category_name: category_id}. {} if unavailable."""
-    return _fetch_id_map("category")
-
-
 def to_point_wkt(lat: float, lon: float) -> str:
     """
     Converts lat/lon into the WKT text PostGIS accepts for a

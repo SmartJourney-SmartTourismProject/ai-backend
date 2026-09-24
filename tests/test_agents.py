@@ -1,207 +1,31 @@
 # tests/test_agents.py
-# The three Phase 6 ReAct agents (app/agents/) - app/core/react.py's own
-# loop already has dedicated coverage (test_react.py), so these tests mock
-# run_react itself and check what each agent does with its result: how it
-# maps a structured output back onto TripState, and how it degrades on a
+# The two remaining Phase 6 ReAct agents (app/agents/) - app/core/react.py's
+# own loop already has dedicated coverage (test_react.py), so these tests
+# mock run_react itself and check what each agent does with its result: how
+# it maps a structured output back onto TripState, and how it degrades on a
 # ReActError. No real LLM, no real tools, no real database.
+#
+# Context resolution (formerly the "orchestrator" agent) is now
+# deterministic (app/core/context_resolver.py, "C2" - itinerary-quality/
+# token-reduction pass) and has its own tests in test_context_resolver.py,
+# not here.
 
 from unittest.mock import AsyncMock
 
-import app.agents.orchestrator_agent as orchestrator_agent_module
 import app.agents.recommendation_agent as recommendation_agent_module
 import app.agents.planner_agent as planner_agent_module
-from app.agents.orchestrator_agent import OrchestratorAgent, filter_ungrounded_safety_notes
 from app.agents.planner_agent import PlannerAgent
 from app.agents.recommendation_agent import RecommendationAgent
 from app.core.react import ReActError, ReActResult, TraceStep, ToolCallTrace
 from app.core.state import TripState
 from app.models.schemas import (
-    DateWindow, DisasterEvent, DisasterSummary, DroppedItem, ItineraryDay, ItineraryItem,
-    PlannerOutput, RecommendationOutput, Selection, TripContext,
+    DroppedItem, ItineraryDay, ItineraryItem, PlannerOutput, RecommendationOutput, Selection,
 )
 
 
 def _react_result(output, trace=None, stopped_by="answer") -> ReActResult:
     return ReActResult(output=output, trace=trace or [], steps_used=len(trace or []),
                         tools_used=[], stopped_by=stopped_by)
-
-
-# ─────────────────────────── orchestrator agent ─────────────────────────────
-
-async def test_orchestrator_agent_populates_trip_context_on_success(monkeypatch):
-    ctx = TripContext(
-        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
-        date_window=DateWindow(start_date="2026-10-01", end_date="2026-10-02", source="default", dates=["2026-10-01", "2026-10-02"]),
-        per_day_weather=[], disaster=DisasterSummary(safe=True, active_events=[]),
-        safety_notes=[], context_confidence="high",
-    )
-    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
-
-    state = TripState(user_input="x", destination="Kandy")
-    result = await OrchestratorAgent().execute(state)
-
-    assert result.success is True
-    assert state.trip_context["district_id"] == "d1"
-    assert state.trip_dates == [{"start_date": "2026-10-01", "end_date": "2026-10-02"}]
-    assert state.react_traces["orchestrator"]["stopped_by"] == "answer"
-
-
-async def test_orchestrator_agent_records_safety_notes_as_soft_errors(monkeypatch):
-    ctx = TripContext(
-        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
-        date_window=DateWindow(start_date="2026-10-01", end_date="2026-10-01", source="default", dates=["2026-10-01"]),
-        per_day_weather=[], disaster=DisasterSummary(safe=False, max_severity="red", active_events=[]),
-        safety_notes=["flooding reported 20km from destination"], context_confidence="medium",
-    )
-    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
-
-    state = TripState(user_input="x", destination="Kandy")
-    await OrchestratorAgent().execute(state)
-
-    assert any("safety_note" in e for e in state.errors)
-
-
-def test_filter_ungrounded_safety_notes_drops_wrong_date():
-    # Regression (live-found 2026-09-06): the orchestrator LLM wrote "Carry
-    # an umbrella on May 3rd due to high rain probability" into safety_notes
-    # for a trip whose real dates were nowhere near May - a hallucination
-    # violating the prompt's own NO_INVENTION_RULE.
-    notes = ["Carry an umbrella on May 3rd due to high rain probability."]
-    kept = filter_ungrounded_safety_notes(notes, valid_iso_dates=["2026-09-06", "2026-09-07"])
-    assert kept == []
-
-
-def test_filter_ungrounded_safety_notes_keeps_correct_date():
-    notes = ["Rain expected on September 6th - bring a light jacket."]
-    kept = filter_ungrounded_safety_notes(notes, valid_iso_dates=["2026-09-06", "2026-09-07"])
-    assert kept == notes
-
-
-def test_filter_ungrounded_safety_notes_keeps_iso_date_within_window():
-    notes = ["Flooding possible near the coast on 2026-09-07."]
-    kept = filter_ungrounded_safety_notes(notes, valid_iso_dates=["2026-09-06", "2026-09-07"])
-    assert kept == notes
-
-
-def test_filter_ungrounded_safety_notes_keeps_notes_with_no_date():
-    # The legitimate case (test_orchestrator_agent_records_safety_notes_as_
-    # soft_errors) - a real disaster observation with no date mentioned at
-    # all should never be touched by a date-grounding check.
-    notes = ["flooding reported 20km from destination"]
-    kept = filter_ungrounded_safety_notes(notes, valid_iso_dates=["2026-09-06"])
-    assert kept == notes
-
-
-async def test_orchestrator_agent_drops_hallucinated_date_from_safety_notes(monkeypatch):
-    ctx = TripContext(
-        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
-        date_window=DateWindow(start_date="2026-09-06", end_date="2026-09-06", source="default", dates=["2026-09-06"]),
-        per_day_weather=[], disaster=DisasterSummary(safe=True, active_events=[]),
-        safety_notes=["Carry an umbrella on May 3rd due to high rain probability."],
-        context_confidence="high",
-    )
-    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
-
-    state = TripState(user_input="x", destination="Kandy")
-    await OrchestratorAgent().execute(state)
-
-    assert not any("safety_note" in e for e in state.errors)
-
-
-async def test_orchestrator_agent_synthesizes_safety_note_when_llm_forgot_to(monkeypatch):
-    # Regression: found live (Phase 8, golden scenario 8, 2026-09-03) - the
-    # orchestrator correctly fetched a real red-severity disaster
-    # observation into ctx.disaster, but the LLM left ctx.safety_notes
-    # empty despite the rule telling it to fill it - the warning silently
-    # never reached the user. safety_notes is now derived deterministically
-    # from ctx.disaster, not trusted to the model alone.
-    ctx = TripContext(
-        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
-        date_window=DateWindow(start_date="2026-10-01", end_date="2026-10-01", source="default", dates=["2026-10-01"]),
-        per_day_weather=[],
-        disaster=DisasterSummary(
-            safe=False, max_severity="red",
-            active_events=[DisasterEvent(type="flood", severity="red", title="Test flood event",
-                                          source="test", distance_km=5.0)],
-        ),
-        safety_notes=[],   # the LLM left this empty - the bug this test guards against
-        context_confidence="high",
-    )
-    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
-
-    state = TripState(user_input="x", destination="Kandy")
-    await OrchestratorAgent().execute(state)
-
-    safety_errors = [e for e in state.errors if "safety_note" in e]
-    assert safety_errors, "a red disaster event must always produce a safety_note, even if the LLM forgot"
-    assert "Test flood event" in safety_errors[0]
-
-
-async def test_orchestrator_agent_no_duplicate_safety_note_when_llm_already_wrote_one(monkeypatch):
-    ctx = TripContext(
-        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
-        date_window=DateWindow(start_date="2026-10-01", end_date="2026-10-01", source="default", dates=["2026-10-01"]),
-        per_day_weather=[],
-        disaster=DisasterSummary(
-            safe=False, max_severity="red",
-            active_events=[DisasterEvent(type="flood", severity="red", title="Test flood event",
-                                          source="test", distance_km=5.0)],
-        ),
-        safety_notes=["Active red-level hazard(s) near your destination: Test flood event."],
-        context_confidence="high",
-    )
-    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
-
-    state = TripState(user_input="x", destination="Kandy")
-    await OrchestratorAgent().execute(state)
-
-    safety_errors = [e for e in state.errors if "safety_note" in e]
-    assert len(safety_errors) == 1
-
-
-async def test_orchestrator_agent_no_safety_note_when_no_red_disaster(monkeypatch):
-    ctx = TripContext(
-        destination_name="Kandy", district_id="d1", lat=7.29, lon=80.63, start_location=None,
-        date_window=DateWindow(start_date="2026-10-01", end_date="2026-10-01", source="default", dates=["2026-10-01"]),
-        per_day_weather=[], disaster=DisasterSummary(safe=True, active_events=[]),
-        safety_notes=[], context_confidence="high",
-    )
-    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(return_value=_react_result(ctx)))
-
-    state = TripState(user_input="x", destination="Kandy")
-    await OrchestratorAgent().execute(state)
-
-    assert not any("safety_note" in e for e in state.errors)
-
-
-async def test_orchestrator_agent_degrades_on_react_error(monkeypatch):
-    monkeypatch.setattr(orchestrator_agent_module, "run_react", AsyncMock(side_effect=ReActError("no key configured")))
-
-    state = TripState(user_input="x", destination="Kandy")
-    result = await OrchestratorAgent().execute(state)
-
-    assert result.success is False
-    assert state.trip_context is None
-    assert any("orchestrator_failed" in e for e in state.errors)
-
-
-async def test_orchestrator_agent_degrades_when_get_llm_itself_raises(monkeypatch):
-    # Regression (Phase 8, scenario 11 - "Gemini unavailable"): get_llm() is
-    # evaluated as part of the run_react(...) call expression, still inside
-    # the try block, but a bare `except ReActError` let a plain RuntimeError
-    # from get_llm() (no provider configured) escape uncaught - crashing the
-    # whole /trip-plan request with an unhandled 500 instead of degrading,
-    # exactly what AGENT_ARCHITECTURE.md §6 says must never happen.
-    def _raise(*a, **kw):
-        raise RuntimeError("No LLM provider has a configured API key.")
-
-    monkeypatch.setattr(orchestrator_agent_module, "get_llm", _raise)
-
-    state = TripState(user_input="x", destination="Kandy")
-    result = await OrchestratorAgent().execute(state)   # must not raise
-
-    assert result.success is False
-    assert any("orchestrator_failed" in e for e in state.errors)
 
 
 # ─────────────────────────── recommendation agent ────────────────────────────
@@ -276,7 +100,7 @@ async def test_recommendation_agent_degrades_on_react_error(monkeypatch):
 
 
 async def test_recommendation_agent_degrades_when_get_llm_itself_raises(monkeypatch):
-    # Same regression as orchestrator_agent's - see that test's comment.
+    # Same regression (Phase 8, scenario 11) - see the sibling agent's identical fix.
     def _raise(*a, **kw):
         raise RuntimeError("No LLM provider has a configured API key.")
 
@@ -369,7 +193,7 @@ async def test_planner_agent_degrades_on_react_error(monkeypatch):
 
 
 async def test_planner_agent_degrades_when_get_llm_itself_raises(monkeypatch):
-    # Same regression as orchestrator_agent's - see that test's comment.
+    # Same regression (Phase 8, scenario 11) - see the sibling agent's identical fix.
     def _raise(*a, **kw):
         raise RuntimeError("No LLM provider has a configured API key.")
 

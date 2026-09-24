@@ -16,10 +16,9 @@ traveler's interests, must_avoid list, budget, and their raw message verbatim.
 TOOLS
 - db_search_listings(district_id, category, tags, must_avoid, max_price_level, near,
   radius_km, limit) -> verified hotels/restaurants/attractions from the real database.
-- db_search_events(district_id, date_from, date_to, tags, limit) -> verified local events.
-- travel_matrix(origins, destinations) -> real road travel times between points.
-- score_candidates(candidates, interests, anchor, budget_per_day, category, must_avoid) ->
-  a deterministically ranked list with a score breakdown per item.
+- score_candidates(listing_ids, interests, anchor, budget_per_day, category, must_avoid) ->
+  a deterministically ranked list with a score breakdown per item. Pass the ids from a
+  db_search_listings observation, not full candidate objects.
 
 RULES
 1.  Recommend ONLY items whose `listing_id` appeared in a db_search_* tool observation
@@ -47,7 +46,7 @@ RULES
 
 RECOMMENDATION_SPEC = PromptSpec(
     name="recommendation",
-    version="1.0.0",
+    version="1.1.0",   # B1 (AI_BACKEND_OPTIMIZATION_PLAN.md): score_candidates now takes listing_ids
     system=RECOMMENDATION_SYSTEM_PROMPT,
     output_schema=RecommendationOutput,
 )
@@ -60,8 +59,8 @@ RECOMMENDATION_SPEC = PromptSpec(
 # reason about - see app/core/react.py's docstring for the full story.
 RECOMMENDATION_FINALIZE_SYSTEM = f"""You already searched for candidates and, if there was enough
 context to need it, ranked them using tools in earlier turns of this conversation. No tools are
-available now - never attempt to call db_search_listings, db_search_events, travel_matrix, or
-score_candidates here; none exist in this turn.
+available now - never attempt to call db_search_listings or score_candidates here; none exist in
+this turn.
 
 Using ONLY the tool observations already provided above:
 1.  Recommend ONLY items whose `listing_id` appeared in a db_search_* observation above. Never

@@ -1,4 +1,5 @@
 # app/api/trip.py
+import hashlib
 import uuid
 from typing import Optional
 
@@ -10,9 +11,25 @@ from app.core.state import TripState
 from app.core.orchestrator import orchestrator
 from app.tools.db_tool import get_data_freshness
 from app.tools.location_tool import resolve_start_location
+from app.utils.cache import cache_get, cache_set
 from app.utils.session_store import load_session, save_session
 
 router = APIRouter(tags=["trip"])
+
+
+def _trip_plan_cache_key(message: str, language: str, user_id: Optional[str]) -> str:
+    """C3 (AI_BACKEND_OPTIMIZATION_PLAN.md): PROJECT_MASTER_PLAN.md §D6c has
+    always claimed identical /trip-plan requests are cached; nothing ever
+    implemented it. Keyed on the normalized message text (not on a
+    session_id, which only exists on a FOLLOW-UP turn) - only applies to
+    fresh, stateless requests, since a follow-up is by definition a
+    modification of already-carried state and has no meaningful "identical
+    request" to hit. Case/whitespace-insensitive so trivial phrasing
+    differences ("Plan a trip to Ella" vs "plan a trip to ella ") still hit
+    the same key - the LLM path is what's expensive here, not string
+    matching precision."""
+    raw = f"{message.strip().lower()}|{language}|{user_id or ''}"
+    return f"trip_plan:{hashlib.sha256(raw.encode()).hexdigest()}"
 
 
 class ClientGPS(BaseModel):
@@ -77,30 +94,47 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
     state (state.is_followup=True) before running the graph, so this
     message is treated as a modification of the existing plan rather than
     a fresh one. See app/utils/session_store.py for what's carried over.
+
+    C3: a fresh (non-follow-up) request identical to one seen recently is
+    served from cache instead of re-running the graph - see
+    _trip_plan_cache_key's docstring. Each cache hit still gets its own new
+    session_id and session row, so follow-ups behave exactly as if the
+    graph had actually run.
     """
-    client_gps = payload.client_gps.model_dump() if payload.client_gps else None
-    client_ip = request.client.host if request.client else None
+    is_fresh_request = payload.session_id is None
+    cache_key = _trip_plan_cache_key(payload.message, payload.language, payload.user_id) if is_fresh_request else None
+    cached_result = await cache_get(cache_key) if cache_key else None
 
-    start_location = await resolve_start_location(client_gps, client_ip)
+    if cached_result is not None:
+        result = cached_result
+        session_id = str(uuid.uuid4())
+    else:
+        client_gps = payload.client_gps.model_dump() if payload.client_gps else None
+        client_ip = request.client.host if request.client else None
 
-    session_id = payload.session_id or str(uuid.uuid4())
-    carried_over = await load_session(session_id) if payload.session_id else None
+        start_location = await resolve_start_location(client_gps, client_ip)
 
-    initial_state = TripState(
-        user_input=payload.message,
-        language=payload.language,
-        session_id=session_id,
-        is_followup=carried_over is not None,
-        **(carried_over or {}),
-    )
-    # This turn's freshly-resolved values always win over carried-over ones:
-    # a new user_id/GPS fix is more current than what a prior turn recorded.
-    if payload.user_id:
-        initial_state.user_id = payload.user_id
-    if start_location:
-        initial_state.start_location = start_location
+        session_id = payload.session_id or str(uuid.uuid4())
+        carried_over = await load_session(session_id) if payload.session_id else None
 
-    result = await orchestrator.ainvoke(initial_state)
+        initial_state = TripState(
+            user_input=payload.message,
+            language=payload.language,
+            session_id=session_id,
+            is_followup=carried_over is not None,
+            **(carried_over or {}),
+        )
+        # This turn's freshly-resolved values always win over carried-over ones:
+        # a new user_id/GPS fix is more current than what a prior turn recorded.
+        if payload.user_id:
+            initial_state.user_id = payload.user_id
+        if start_location:
+            initial_state.start_location = start_location
+
+        result = await orchestrator.ainvoke(initial_state)
+
+        if cache_key and not result.get("clarification_needed"):
+            await cache_set(cache_key, result, settings.cache_ttl)
 
     await save_session(session_id, TripState(**result))
 

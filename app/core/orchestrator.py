@@ -20,20 +20,25 @@ from app.utils.validators import validate_trip_state
 from app.utils.policy_guard import check_policy
 from app.utils.slot_filling import fill_slots
 
-from app.agents.orchestrator_agent import OrchestratorAgent
 from app.agents.recommendation_agent import RecommendationAgent
 from app.agents.planner_agent import PlannerAgent
 
+from app.core.context_resolver import resolve_trip_context
+from app.core.itinerary import DAY_END, DEFAULT_MAX_SINGLE_HOP_MINUTES
 from app.core.output_validator import ValidationContext, validate
 from app.core.fallback import PlanningContext, build_plan
 from app.core.followup_replan import rebuild_targeted_days
-from app.core.planner_shared import build_planner_human_message
+from app.core.planner_shared import build_planner_human_message, resolve_items_per_day
 from app.core.react import ReActConfig, run_react
 from app.core.llm import get_llm
 from app.models.schemas import PlannerOutput, RepairedPlannerOutput
-from app.prompts.repair_prompt import build_repair_finalize_system, build_repair_prompt
+from app.prompts import get_prompt
+from app.prompts._base import enforce_max_input_chars
+from app.prompts.repair_prompt import (
+    REPAIR_FINALIZE_SYSTEM, REPAIR_SYSTEM_PROMPT, build_repair_failures_message,
+)
 from app.tools.registry import build_planning_tools
-from app.agents.planner_agent import _fetch_cost_table
+from app.agents.planner_agent import _build_item_store, _fetch_cost_table, _fetch_outdoor_tags
 from langchain_core.messages import HumanMessage, SystemMessage
 
 logger = logging.getLogger(__name__)
@@ -58,7 +63,12 @@ async def _slot_fill_node(state: TripState) -> TripState:
 
 
 async def _orchestrate_node(state: TripState) -> TripState:
-    await OrchestratorAgent().execute(state)
+    # Deterministic, no LLM (app/core/context_resolver.py, "C2" in
+    # docs/AI_BACKEND_OPTIMIZATION_PLAN.md) - resolves destination/district,
+    # a date window, weather and disaster info, and the derived safety
+    # notes. Was a 3-agent ReAct system; is now 2 (recommendation, planner)
+    # plus this plumbing step, which never needed to be probabilistic.
+    await resolve_trip_context(state)
     state.completed_steps.append("orchestrate")
     return state
 
@@ -119,6 +129,12 @@ def _build_validation_context(state: TripState) -> ValidationContext:
         must_avoid_listing_ids=must_avoid_ids,
         per_day_rain_probability=per_day_rain,
         cost_lookup={},              # empty -> cost_recomputes is a no-op per its own documented behaviour, not a false pass
+        # Part 4 (guardrails): the same real values the deterministic path
+        # enforces by construction (app/core/itinerary.py), now also
+        # checked against the LLM planner's own output.
+        day_end=DAY_END,
+        max_single_hop_minutes=DEFAULT_MAX_SINGLE_HOP_MINUTES,
+        expected_items_per_day=resolve_items_per_day(state),
     )
 
 
@@ -147,29 +163,61 @@ async def _verify_node(state: TripState) -> TripState:
     return state
 
 
+def _trim_previous_output(planner_output: dict) -> dict:
+    """B3 (AI_BACKEND_OPTIMIZATION_PLAN.md): the repair call used to resend
+    the ENTIRE previous itinerary verbatim - every item's name/lat/lon/
+    currency/notes, all already present in the human message built by
+    build_planner_human_message() (the same selections, by id). Strips each
+    item to just what identifies it and what a repair might need to check
+    (listing_id/type/time/end_time/est_cost) - name/lat/lon are recoverable
+    from the selections already in context. Deliberately NOT trimmed to
+    only the failing day(s): several L2 rules (day_count, cost_consistent,
+    budget_honest, days_sequential) are plan-wide, so a repair for one of
+    those genuinely needs every day's shape, not just the day a per-item
+    rule happened to name."""
+    days = planner_output.get("itinerary") or []
+    return {
+        "itinerary": [
+            {
+                "day": d.get("day"), "date": d.get("date"), "day_cost": d.get("day_cost"),
+                "items": [
+                    {"listing_id": i.get("listing_id"), "type": i.get("type"),
+                     "time": i.get("time"), "end_time": i.get("end_time"), "est_cost": i.get("est_cost")}
+                    for i in (d.get("items") or [])
+                ],
+            }
+            for d in days
+        ],
+        "estimated_cost": planner_output.get("estimated_cost"),
+    }
+
+
 async def _repair_node(state: TripState) -> TripState:
     """One repair attempt (AGENT_ARCHITECTURE.md §5's REPAIR_SPEC) - a
     second failure routes to fallback, never a second repair
     (_route_after_verify enforces this by checking repair_attempts)."""
     state.repair_attempts += 1
     cost_table = await _fetch_cost_table()
-    tools = build_planning_tools(cost_table)
-    repair_prompt = build_repair_prompt(state.validation_failures)
-    human = build_planner_human_message(state)
+    outdoor_tags = await _fetch_outdoor_tags()
+    district_id = (state.trip_context or {}).get("district_id")
+    tools = build_planning_tools(cost_table, _build_item_store(state), outdoor_tags, district_id)
+    human = enforce_max_input_chars(get_prompt("repair"), build_planner_human_message(state))
+    previous_output = _trim_previous_output(state.planner_output or {})
     messages = [
-        SystemMessage(content=repair_prompt),
+        SystemMessage(content=REPAIR_SYSTEM_PROMPT),
+        HumanMessage(content=build_repair_failures_message(state.validation_failures)),
         HumanMessage(content=human),
-        HumanMessage(content=f"Previous (invalid) output: {state.planner_output}"),
+        HumanMessage(content=f"Previous (invalid) output: {previous_output}"),
     ]
 
     try:
         result = await run_react(
             llm=get_llm("plan"), tools=tools, messages=messages,
             output_schema=RepairedPlannerOutput, config=ReActConfig(),
-            finalize_system=build_repair_finalize_system(state.validation_failures),
+            finalize_system=REPAIR_FINALIZE_SYSTEM,
         )
     except Exception as e:
-        # Broadened beyond ReActError - see app/agents/orchestrator_agent.py's
+        # Broadened beyond ReActError - see app/agents/planner_agent.py's
         # identical fix (Phase 8, scenario 11).
         logger.warning(f"repair attempt failed: {e}")
         state.errors.append(f"repair_failed: {e}")
@@ -214,7 +262,7 @@ async def _fallback_node(state: TripState) -> TripState:
         travel_style=state.travel_style,
         interests=state.interests,
         must_avoid=state.must_avoid,
-        pace_items_per_day={"relaxed": 2, "balanced": 3, "packed": 5}.get(state.pace or "balanced", 3),
+        pace_items_per_day=resolve_items_per_day(state),
         start_location=state.start_location,
         per_day_rain_probability=per_day_rain,
         disaster=state.disaster,

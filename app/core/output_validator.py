@@ -29,7 +29,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from app.core.scoring import haversine_km
+from app.core.itinerary import DAY_END, DEFAULT_MAX_SINGLE_HOP_MINUTES
+from app.core.scoring import haversine_km, haversine_minutes
 from app.models.schemas import PlannerOutput, ItineraryDay, ItineraryItem
 
 # Sri Lanka's real bounding box - matches the field-level constraint already
@@ -58,6 +59,15 @@ class ValidationContext:
     must_avoid_listing_ids: set[str] = field(default_factory=set)  # ids that violate a must_avoid tag
     per_day_rain_probability: dict[str, float] = field(default_factory=dict)
     cost_lookup: dict[str, float] = field(default_factory=dict)  # listing_id -> real recomputed cost
+    # Part 4 (guardrails) - route/feasibility checks on the LLM planner's own
+    # output, mirroring what app/core/itinerary.py already enforces
+    # deterministically. All three default to None/absent and degrade to a
+    # pass when absent (the _cost_recomputes precedent above - a caller
+    # without this data, e.g. orchestrator.py's cost_lookup={} path or a
+    # test fixture, shouldn't have that read as a false failure).
+    day_end: Optional[str] = None                             # "HH:MM" curfew, e.g. itinerary.DAY_END
+    max_single_hop_minutes: Optional[float] = None             # itinerary.DEFAULT_MAX_SINGLE_HOP_MINUTES
+    expected_items_per_day: Optional[int] = None               # planner_shared.resolve_items_per_day(state)
 
 
 @dataclass
@@ -170,12 +180,77 @@ def _currency_is_lkr(plan: PlannerOutput) -> bool:
     return plan.currency == "LKR" and all(i.currency == "LKR" for i in _all_items(plan))
 
 
+def _days_have_items(plan: PlannerOutput) -> bool:
+    """Live-found regression (itinerary-quality/token-reduction pass): A1
+    dropped ItineraryDay.items' schema-level `min_length=1` (a business
+    rule, not something that should live in a schema that has to survive
+    provider-side structured decoding - see schemas.py's own comment on
+    why). Nothing else in L1/L2 ever required a day to have at least one
+    item - `_times_ordered`/`_cost_consistent` are all vacuously true on an
+    empty list - so a repair call was observed live producing
+    `items: []` with the PREVIOUS attempt's day_cost carried over
+    unchanged, and it passed every existing check. A day with a nonzero
+    cost and zero items is not a plan; this is the L2-layer equivalent of
+    the schema constraint that was removed."""
+    return all(len(d.items) > 0 for d in plan.itinerary)
+
+
+def _day_ends_by_curfew(plan: PlannerOutput, ctx: ValidationContext) -> bool:
+    """Part 4 (guardrails): the deterministic path (app/core/itinerary.py)
+    enforces DAY_END by construction now; nothing previously checked
+    whether the LLM planner's OWN output respects the same curfew - it
+    could freely claim a day ending at 23:40 and pass every other rule.
+    Compares the MAX end_time in the day, not just the last list entry -
+    this check runs independently of times_ordered (validate() doesn't
+    stop at the first failure), so the list isn't guaranteed sorted yet
+    when this evaluates."""
+    if ctx.day_end is None:
+        return True
+    return all(
+        not day.items or max(i.end_time for i in day.items) <= ctx.day_end
+        for day in plan.itinerary
+    )
+
+
+def _no_absurd_hop(plan: PlannerOutput, ctx: ValidationContext) -> bool:
+    """Part 4 (guardrails): the deterministic path's max_single_hop_minutes
+    cap (the direct fix for the Rangala Natural Pool case - a single
+    unreasonable hop placed early in the day, before any cumulative cap
+    would catch it) only ever applied to build_day_plan's own construction;
+    the LLM planner's finished output was never checked against it at all."""
+    if ctx.max_single_hop_minutes is None:
+        return True
+    for day in plan.itinerary:
+        items = day.items
+        for prev, cur in zip(items, items[1:]):
+            hop = haversine_minutes({"lat": prev.lat, "lon": prev.lon}, {"lat": cur.lat, "lon": cur.lon})
+            if hop > ctx.max_single_hop_minutes:
+                return False
+    return True
+
+
+def _items_per_day_respected(plan: PlannerOutput, ctx: ValidationContext) -> bool:
+    """Part 4 (guardrails): a follow-up asking for fewer destinations per
+    day (Part 3) only actually means something if the planner's output is
+    CHECKED against it - `<=`, not `==`, since weather/price/feasibility
+    drops legitimately produce a day with fewer attractions than requested,
+    and that's correct behavior, not a violation."""
+    if ctx.expected_items_per_day is None:
+        return True
+    for day in plan.itinerary:
+        attraction_count = sum(1 for i in day.items if i.type == "attraction")
+        if attraction_count > ctx.expected_items_per_day:
+            return False
+    return True
+
+
 # Named exactly as docs/master_plan/DETERMINISM_AND_VALIDATION.md §5 lists
 # them, so a failure message's rule name is directly traceable to the spec.
 _L2_RULES: list[tuple[str, callable]] = [
     ("day_count", lambda p, c: len(p.itinerary) == c.duration_days),
     ("dates_in_window", lambda p, c: all(d.date in c.valid_dates for d in p.itinerary)),
     ("days_sequential", lambda p, c: _days_sequential(p)),
+    ("days_have_items", lambda p, c: _days_have_items(p)),
     ("no_duplicates", lambda p, c: _no_duplicates(p)),
     ("times_ordered", lambda p, c: all(_times_ordered(d) for d in p.itinerary)),
     ("cost_consistent", lambda p, c: _cost_consistent(p)),
@@ -187,6 +262,9 @@ _L2_RULES: list[tuple[str, callable]] = [
     ("disaster_avoid", lambda p, c: _disaster_avoid(p, c)),
     ("must_avoid", lambda p, c: _must_avoid_respected(p, c)),
     ("currency", lambda p, c: _currency_is_lkr(p)),
+    ("day_ends_by_curfew", lambda p, c: _day_ends_by_curfew(p, c)),
+    ("no_absurd_hop", lambda p, c: _no_absurd_hop(p, c)),
+    ("items_per_day_respected", lambda p, c: _items_per_day_respected(p, c)),
 ]
 
 

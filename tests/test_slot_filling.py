@@ -141,6 +141,70 @@ async def test_followup_overwrites_already_set_fields(monkeypatch):
     assert result.destination == "Kandy"  # untouched field stays as carried over
 
 
+async def test_followup_exact_items_per_day_overwrites_directly(monkeypatch):
+    _patch_llm(monkeypatch, ExtractedSlots(items_per_day=2))
+    state = TripState(
+        user_input="Just 2 places a day please", destination="Kandy",
+        duration_days=2, is_followup=True,
+    )
+
+    result = await fill_slots(state)
+
+    assert result.items_per_day == 2
+
+
+async def test_followup_fewer_delta_decrements_from_the_resolved_pace_count(monkeypatch):
+    # Part 3's whole point: "fewer" has no exact number to give, so it must
+    # be resolved against what items_per_day WOULD be right now - here,
+    # nothing was set yet, so it falls back to pace="balanced"'s default of
+    # 3 (app/core/planner_shared.py's PACE_ITEMS), then subtracts 1.
+    _patch_llm(monkeypatch, ExtractedSlots(items_per_day_delta=-1))
+    state = TripState(
+        user_input="Can we do fewer places each day", destination="Kandy",
+        duration_days=2, is_followup=True,
+    )
+
+    result = await fill_slots(state)
+
+    assert result.items_per_day == 2
+
+
+async def test_followup_a_second_fewer_delta_compounds_on_the_first(monkeypatch):
+    # The actual defect this fixes: a SECOND "even fewer" must decrement
+    # from what the FIRST follow-up already set (2), not from the original
+    # pace-derived count (3) again.
+    _patch_llm(monkeypatch, ExtractedSlots(items_per_day_delta=-1))
+    state = TripState(
+        user_input="Even fewer please", destination="Kandy",
+        duration_days=2, items_per_day=2, is_followup=True,
+    )
+
+    result = await fill_slots(state)
+
+    assert result.items_per_day == 1
+
+
+async def test_followup_delta_is_clamped_to_the_minimum_of_one(monkeypatch):
+    _patch_llm(monkeypatch, ExtractedSlots(items_per_day_delta=-3))
+    state = TripState(
+        user_input="Way fewer", destination="Kandy", duration_days=2,
+        items_per_day=1, is_followup=True,
+    )
+
+    result = await fill_slots(state)
+
+    assert result.items_per_day == 1   # never drops below 1, not -2
+
+
+async def test_first_turn_exact_items_per_day_is_honored(monkeypatch):
+    _patch_llm(monkeypatch, ExtractedSlots(destination="Kandy", items_per_day=2))
+    state = TripState(user_input="Plan a trip to Kandy, just 2 places a day")
+
+    result = await fill_slots(state)
+
+    assert result.items_per_day == 2
+
+
 async def test_followup_skips_defaulting_and_clarification(monkeypatch):
     # Destination-only defaulting, profile backfill, and the "ask for a
     # destination" clarification are first-turn-only concerns - a follow-up

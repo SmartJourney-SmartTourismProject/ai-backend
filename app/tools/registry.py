@@ -5,9 +5,27 @@ can bind them to an LLM via bind_tools(). One Pydantic args schema per tool;
 the underlying functions themselves (app/tools/*.py) are untouched - this
 module only adds the LangChain-facing schema/description layer on top.
 
-13 tools total, grouped into three per-agent lists so no agent ever sees
-more than 6 - Gemini's tool-selection quality degrades with large tool
-lists (AGENT_ARCHITECTURE.md §4's own note).
+Grouped into per-agent lists so no agent ever sees more than 6 tools -
+Gemini's tool-selection quality degrades with large tool lists
+(AGENT_ARCHITECTURE.md §4's own note).
+
+The former "context tools" (resolve_place/resolve_district/
+resolve_start_location/get_calendar_free_days/get_weather/
+get_disaster_info) are gone from here - context resolution became
+deterministic (app/core/context_resolver.py, "C2" in the itinerary-quality/
+token-reduction pass) and calls those same underlying app/tools/* functions
+directly, with no LangChain tool-schema wrapper needed since there's no LLM
+choosing whether/how to call them anymore.
+
+`score_candidates`/`estimate_costs`/`build_day_plan` are id-based ("B1" in
+the same pass), not full-dict-based: every db_search_listings call this
+request makes is accumulated into an in-memory item store keyed by id (see
+build_data_tools()'s item_store / planner_agent.py's item_store built from
+state.hotels/etc), so the model passes back a handful of listing_ids
+instead of re-emitting entire candidate rows as output tokens just to name
+which ones it means. This was the single largest model-generated payload in
+the system - up to 15 rows x ~15 fields, once per category, per the
+recommendation prompt's own one-call-per-category rule.
 """
 from __future__ import annotations
 
@@ -16,107 +34,20 @@ from typing import Optional
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from app.tools.geo_tool import resolve_district, resolve_place
-from app.tools.location_tool import resolve_start_location
-from app.tools.calendar_tool import get_free_days
-from app.tools.weather_tool import get_weather
-from app.tools.disaster_tool import get_disaster_info
-from app.tools.db_tool import search_listings_by_district, search_events_by_district
-from app.tools.routing_tool import get_travel_matrix, Point
+from app.tools.db_tool import search_listings_by_district
 from app.core.scoring import ScoringContext, TravelMatrix, rank
 from app.core.budget import CostReferenceTable, estimate_item_cost, check_budget as _check_budget_pure
 from app.core.itinerary import DayConstraints, DaySelections, build_day_plan as _build_day_plan_pure
 
 
-# ─────────────────────────── context tools (orchestrator) ──────────────────
-
-class _ResolvePlaceArgs(BaseModel):
-    name: str = Field(description="A place name as the traveler wrote it, e.g. 'Ella' or 'New York'.")
-
-
-async def _resolve_place(name: str) -> dict:
-    result = await resolve_place(name)
-    return result or {"error": f"could not resolve '{name}' to any place"}
-
-
-class _ResolveDistrictArgs(BaseModel):
-    lat: float
-    lon: float
-
-
-async def _resolve_district(lat: float, lon: float) -> dict:
-    result = await resolve_district(lat, lon)
-    return result or {"error": f"no district found near ({lat}, {lon})"}
-
-
-class _ResolveStartLocationArgs(BaseModel):
-    client_gps: Optional[dict] = Field(None, description="{'lat':..., 'lon':...} if the client already sent GPS.")
-    client_ip: Optional[str] = None
-
-
-async def _resolve_start_location(client_gps: Optional[dict] = None, client_ip: Optional[str] = None) -> dict:
-    result = await resolve_start_location(client_gps, client_ip)
-    return result or {"error": "could not resolve a starting location from gps or ip"}
-
-
-class _GetCalendarFreeDaysArgs(BaseModel):
-    user_id: str
-    window_days: int = Field(30, description="How many days ahead to search for free windows.")
-
-
-async def _get_calendar_free_days(user_id: str, window_days: int = 30) -> dict:
-    ranges = await get_free_days(user_id, window_days)
-    return {"free_ranges": ranges}
-
-
-class _GetWeatherArgs(BaseModel):
-    lat: float
-    lon: float
-    dates: list[str] = Field(description="ISO date strings, e.g. ['2026-10-01','2026-10-02'].")
-
-
-async def _get_weather(lat: float, lon: float, dates: list[str]) -> dict:
-    result = await get_weather(lat, lon, dates)
-    return result or {"error": "weather unavailable"}
-
-
-class _GetDisasterInfoArgs(BaseModel):
-    lat: float
-    lon: float
-    radius_km: int = 300
-
-
-async def _get_disaster_info(lat: float, lon: float, radius_km: int = 300) -> dict:
-    return await get_disaster_info(lat, lon, radius_km)
-
-
-CONTEXT_TOOLS: list[StructuredTool] = [
-    StructuredTool.from_function(
-        coroutine=_resolve_place, name="resolve_place", args_schema=_ResolvePlaceArgs,
-        description="Resolve a place name to coordinates + district_id for a Sri Lankan place, "
-                     "or confidence='out_of_country' if it isn't one.",
-    ),
-    StructuredTool.from_function(
-        coroutine=_resolve_district, name="resolve_district", args_schema=_ResolveDistrictArgs,
-        description="Resolve a lat/lon point to its district_id, name, and province.",
-    ),
-    StructuredTool.from_function(
-        coroutine=_resolve_start_location, name="resolve_start_location", args_schema=_ResolveStartLocationArgs,
-        description="Resolve the traveler's own starting point from GPS or IP.",
-    ),
-    StructuredTool.from_function(
-        coroutine=_get_calendar_free_days, name="get_calendar_free_days", args_schema=_GetCalendarFreeDaysArgs,
-        description="Get the traveler's free date ranges from their connected calendar, if any.",
-    ),
-    StructuredTool.from_function(
-        coroutine=_get_weather, name="get_weather", args_schema=_GetWeatherArgs,
-        description="Get forecast (temp, condition, rain probability) for specific dates at a point.",
-    ),
-    StructuredTool.from_function(
-        coroutine=_get_disaster_info, name="get_disaster_info", args_schema=_GetDisasterInfoArgs,
-        description="Get active hazards (flood, landslide, storm, etc.) near a point.",
-    ),
-]
+def _resolve_ids(ids: list[str], item_store: dict[str, dict]) -> list[dict]:
+    """Every id that isn't in item_store (the model naming one it never
+    actually observed) is silently dropped rather than raising - matches
+    every other tool's own "never raises, returns what it can" convention;
+    app/core/output_validator.py's L1 referential check is what actually
+    enforces that every listing_id in the final PlannerOutput came from a
+    real observation, not this lookup."""
+    return [item_store[i] for i in ids if i in item_store]
 
 
 # ─────────────────────────── data tools (recommendation) ───────────────────
@@ -129,42 +60,17 @@ class _DbSearchListingsArgs(BaseModel):
     max_price_level: Optional[int] = None
     near: Optional[dict] = Field(None, description="{'lat':..., 'lon':..., 'radius_km':...} to restrict by proximity.")
     radius_km: Optional[float] = None
-    limit: int = 40
-
-
-async def _db_search_listings(**kwargs) -> dict:
-    try:
-        return await search_listings_by_district(**kwargs)
-    except Exception as e:
-        return {"error": str(e), "items": [], "total": 0, "truncated": False}
-
-
-class _DbSearchEventsArgs(BaseModel):
-    district_id: str
-    date_from: str
-    date_to: str
-    tags: list[str] = Field(default_factory=list)
-    limit: int = 20
-
-
-async def _db_search_events(**kwargs) -> dict:
-    try:
-        return await search_events_by_district(**kwargs)
-    except Exception as e:
-        return {"error": str(e), "items": [], "total": 0, "truncated": False}
-
-
-class _TravelMatrixArgs(BaseModel):
-    origins: list[Point]
-    destinations: list[Point]
-
-
-async def _travel_matrix(origins: list[Point], destinations: list[Point]) -> dict:
-    return await get_travel_matrix(origins, destinations)
+    # O1 (AI_BACKEND_OPTIMIZATION_PLAN.md): was 40 - the agent selects at
+    # most 3 hotels / 2xdays restaurants / 3xdays attractions regardless,
+    # and score_candidates does the real ordering, so 40 full-width rows per
+    # category was pure token overhead, not extra selection quality.
+    limit: int = 15
 
 
 class _ScoreCandidatesArgs(BaseModel):
-    candidates: list[dict]
+    listing_ids: list[str] = Field(
+        description="ids from a db_search_listings observation earlier in this conversation - "
+                     "not full candidate objects.")
     interests: list[str] = Field(default_factory=list)
     anchor: dict = Field(default_factory=dict)
     budget_per_day: Optional[float] = None
@@ -172,92 +78,109 @@ class _ScoreCandidatesArgs(BaseModel):
     must_avoid: list[str] = Field(default_factory=list)
 
 
-def _score_candidates(candidates: list[dict], interests: list[str], anchor: dict,
-                       budget_per_day: Optional[float], category: str, must_avoid: list[str]) -> dict:
-    ctx = ScoringContext(
-        interests=interests, anchor=anchor, matrix=TravelMatrix(),
-        budget_per_day={category: budget_per_day}, must_avoid=must_avoid,
-    )
-    ranked = rank(candidates, ctx, category)
-    return {
-        "ranked": [
-            {
-                "listing_id": r.item["id"], "rank": i + 1, "score": r.score,
-                "breakdown": {"pref": r.breakdown.pref, "prox": r.breakdown.prox,
-                              "rating": r.breakdown.rating, "cost": r.breakdown.cost},
-            }
-            for i, r in enumerate(ranked)
-        ]
-    }
+def build_data_tools() -> tuple[list[StructuredTool], dict[str, dict]]:
+    """Per-request factory (mirrors build_planning_tools' own closure
+    pattern below) - `item_store` accumulates every item any
+    db_search_listings call in THIS request has returned, keyed by id, so
+    score_candidates can take listing_ids. Returned alongside the tools so
+    a caller (RecommendationAgent) can still read the full pool after the
+    ReAct loop finishes, same as it always could from the trace."""
+    item_store: dict[str, dict] = {}
 
+    async def _db_search_listings(**kwargs) -> dict:
+        try:
+            result = await search_listings_by_district(**kwargs)
+        except Exception as e:
+            return {"error": str(e), "items": [], "total": 0, "truncated": False}
+        for item in result.get("items") or []:
+            if "id" in item:
+                item_store[str(item["id"])] = item
+        return result
 
-DATA_TOOLS: list[StructuredTool] = [
-    StructuredTool.from_function(
+    def _score_candidates(listing_ids: list[str], interests: list[str], anchor: dict,
+                           budget_per_day: Optional[float], category: str, must_avoid: list[str]) -> dict:
+        candidates = _resolve_ids(listing_ids, item_store)
+        ctx = ScoringContext(
+            interests=interests, anchor=anchor, matrix=TravelMatrix(),
+            budget_per_day={category: budget_per_day}, must_avoid=must_avoid,
+        )
+        ranked = rank(candidates, ctx, category)
+        return {
+            "ranked": [
+                {
+                    "listing_id": r.item["id"], "rank": i + 1, "score": r.score,
+                    "breakdown": {"pref": r.breakdown.pref, "prox": r.breakdown.prox,
+                                  "rating": r.breakdown.rating, "cost": r.breakdown.cost},
+                }
+                for i, r in enumerate(ranked)
+            ]
+        }
+
+    db_search_listings_tool = StructuredTool.from_function(
         coroutine=_db_search_listings, name="db_search_listings", args_schema=_DbSearchListingsArgs,
         description="Search verified hotels/restaurants/attractions in a district from the real database.",
-    ),
-    StructuredTool.from_function(
-        coroutine=_db_search_events, name="db_search_events", args_schema=_DbSearchEventsArgs,
-        description="Search verified local events in a district overlapping a date window.",
-    ),
-    StructuredTool.from_function(
-        coroutine=_travel_matrix, name="travel_matrix", args_schema=_TravelMatrixArgs,
-        description="Get real road travel minutes/km between every origin x destination pair, in one call.",
-    ),
-    StructuredTool.from_function(
+    )
+    # db_search_events removed (AI_BACKEND_OPTIMIZATION_PLAN.md C5): local_event
+    # has 0 rows, Ticketmaster returns zero events for Sri Lanka - this was a
+    # tool the recommendation agent could waste a ReAct step calling for a
+    # result that's always empty. search_events_by_district itself is kept
+    # (app/tools/db_tool.py) for when admin-entered events land.
+    #
+    # travel_matrix removed too (B2, same pass): TravelMatrix.from_matrix_result
+    # has always had zero real callers - every planner builds an EMPTY
+    # TravelMatrix (scoring.py/itinerary.py fall back to haversine per-pair
+    # automatically), so the LLM calling this tool spent a whole ReAct step
+    # and a real ORS quota call for a result nothing downstream ever reads.
+    score_candidates_tool = StructuredTool.from_function(
         func=_score_candidates, name="score_candidates", args_schema=_ScoreCandidatesArgs,
-        description="Deterministically rank candidates by preference/proximity/rating/cost. "
-                     "The only legal source of an ordering - never reorder its output.",
-    ),
-]
+        description="Deterministically rank candidates (by id, from a db_search_listings observation) "
+                     "by preference/proximity/rating/cost. The only legal source of an ordering - "
+                     "never reorder its output.",
+    )
+    return [db_search_listings_tool, score_candidates_tool], item_store
 
 
 # ─────────────────────────── planning tools (planner) ──────────────────────
 
 class _EstimateCostsArgs(BaseModel):
-    items: list[dict]
+    listing_ids: list[str] = Field(description="ids of items already known from the recommendation "
+                                                "(state.hotels/restaurants/attractions/events) - not full objects.")
     category: str
-    district_id: Optional[str] = None
 
 
 class _BuildDayPlanArgs(BaseModel):
     day: int
     date: str
     anchor: dict
-    hotels: list[dict] = Field(default_factory=list)
-    restaurants: list[dict] = Field(default_factory=list)
-    attractions: list[dict] = Field(default_factory=list)
+    hotel_ids: list[str] = Field(default_factory=list)
+    attraction_ids: list[str] = Field(default_factory=list)
     items_target: int = 3
     exclude_outdoor: bool = False
-    outdoor_tags: list[str] = Field(default_factory=list)
     need_hotel_checkin: bool = False
     need_hotel_checkout: bool = False
     prefer_price_level_max: Optional[int] = None
-    cost_lookup: dict[str, float] = Field(default_factory=dict)
-
-
-def _build_day_plan(day: int, date: str, anchor: dict, hotels: list[dict], restaurants: list[dict],
-                     attractions: list[dict], items_target: int, exclude_outdoor: bool,
-                     outdoor_tags: list[str], need_hotel_checkin: bool, need_hotel_checkout: bool,
-                     prefer_price_level_max: Optional[int], cost_lookup: dict[str, float]) -> dict:
-    selections = DaySelections(hotels=hotels, restaurants=restaurants, attractions=attractions)
-    constraints = DayConstraints(
-        items_target=items_target, exclude_outdoor=exclude_outdoor,
-        outdoor_tags=frozenset(outdoor_tags), need_hotel_checkin=need_hotel_checkin,
-        need_hotel_checkout=need_hotel_checkout, prefer_price_level_max=prefer_price_level_max,
-        cost_lookup=cost_lookup,
-    )
-    plan = _build_day_plan_pure(day, date, anchor, selections, constraints)
-    return {
-        "items": [
-            {"time": it.time, "end_time": it.end_time, "type": it.type, "listing_id": it.listing_id,
-             "name": it.name, "lat": it.lat, "lon": it.lon, "est_cost": it.est_cost,
-             "currency": it.currency, "notes": it.notes}
-            for it in plan.items
-        ],
-        "day_cost": plan.day_cost, "total_km": plan.total_km,
-        "total_travel_min": plan.total_travel_min, "dropped": plan.dropped,
-    }
+    # outdoor_tags and cost_lookup dropped (B1) - both are pure server
+    # state the model had no business carrying: outdoor_tags is the whole
+    # tag_vocabulary "is this tag outdoor" list (see
+    # build_planning_tools' own fetch below), and cost_lookup used to be
+    # transcribed by hand from a prior estimate_costs observation - a
+    # mis-copied value there silently broke output_validator.py's
+    # cost_recomputes check. Both are now resolved deterministically inside
+    # _build_day_plan from the same cost_table/outdoor_tags this closure
+    # already has, for every item it actually places.
+    #
+    # restaurant_ids dropped too (itinerary-quality/token-reduction pass,
+    # Part 2 extension) - live-found: the model had no geographic signal
+    # when deciding which restaurant_ids to assign to which day, so a real
+    # run put a Badulla restaurant on an all-Ella day, ~13km from every
+    # other stop. Unlike attractions ("which day do I visit this" is a
+    # real judgment call), a restaurant is purely meal-time filler with no
+    # day-specific meaning - nearest-available-and-not-yet-used is always
+    # the right answer, which is exactly what build_day_plan's own
+    # nearest_restaurant() already computes deterministically for the
+    # fallback planner. Restaurants are now resolved the same way for
+    # every path: from the full pool this request observed, never from a
+    # per-day list the model had to partition by hand.
 
 
 class _CheckBudgetArgs(BaseModel):
@@ -279,13 +202,46 @@ def _check_budget(day_costs: list[dict], budget: Optional[float] = None,
     }
 
 
-def build_planning_tools(cost_table: CostReferenceTable) -> list[StructuredTool]:
-    """`estimate_costs` needs a pre-fetched cost_reference table (real DB
-    data, fetched once per request by the planner agent node - see
-    app/agents/planner_agent.py) - built here rather than as a bare module
-    function so the closure captures that table without a global."""
+def build_planning_tools(
+    cost_table: CostReferenceTable,
+    item_store: Optional[dict[str, dict]] = None,
+    outdoor_tags: frozenset[str] = frozenset(),
+    district_id: Optional[str] = None,
+) -> list[StructuredTool]:
+    """`item_store` (id -> full item dict, built by the caller from
+    state.hotels/restaurants/attractions/events - see planner_agent.py) and
+    `outdoor_tags`/`district_id` are all per-request data closed over here,
+    same reason `cost_table` already was: `estimate_costs` and
+    `build_day_plan` need real DB-derived data no LLM call should have to
+    carry back and forth. item_store defaults to {} (not None) so a caller
+    that doesn't pass one - e.g. an existing test - degrades to "nothing
+    resolves" rather than crashing on a NoneType lookup."""
+    item_store = item_store or {}
+    # Shared ACROSS every build_day_plan call this request makes (not reset
+    # per call) - same cross-day dedup convention app/core/fallback.py's
+    # build_plan_core already uses for attractions/restaurants, now applied
+    # here too so day 2 doesn't repeat day 1's restaurant just because it's
+    # still the nearest candidate.
+    used_restaurant_ids: set[str] = set()
 
-    def _estimate_costs_impl(items: list[dict], category: str, district_id: Optional[str] = None) -> dict:
+    def _restaurant_pool() -> list[dict]:
+        all_restaurants = [item for item in item_store.values() if item.get("category") == "restaurant"]
+        fresh = [r for r in all_restaurants if r["id"] not in used_restaurant_ids]
+        # Reuse rather than serve a day with no restaurant candidates at
+        # all once every real one is exhausted - same "degrade, don't
+        # omit" convention as everywhere else in this codebase.
+        return fresh or all_restaurants
+
+    def _cost_lookup_for(items: list[dict], category: str) -> dict[str, float]:
+        out = {}
+        for item in items:
+            est = estimate_item_cost(item, category, district_id, cost_table)
+            if est.value is not None:
+                out[item["id"]] = est.value
+        return out
+
+    def _estimate_costs_impl(listing_ids: list[str], category: str) -> dict:
+        items = _resolve_ids(listing_ids, item_store)
         per_item = {}
         subtotal = 0.0
         for item in items:
@@ -294,21 +250,51 @@ def build_planning_tools(cost_table: CostReferenceTable) -> list[StructuredTool]
             subtotal += est.value or 0.0
         return {"per_item": per_item, "subtotal": round(subtotal, 2), "currency": "LKR"}
 
+    def _build_day_plan(day: int, date: str, anchor: dict, hotel_ids: list[str],
+                         attraction_ids: list[str], items_target: int, exclude_outdoor: bool,
+                         need_hotel_checkin: bool, need_hotel_checkout: bool,
+                         prefer_price_level_max: Optional[int]) -> dict:
+        hotels = _resolve_ids(hotel_ids, item_store)
+        attractions = _resolve_ids(attraction_ids, item_store)
+        restaurants = _restaurant_pool()
+        cost_lookup = {
+            **_cost_lookup_for(hotels, "hotel"),
+            **_cost_lookup_for(restaurants, "restaurant"),
+            **_cost_lookup_for(attractions, "attraction"),
+        }
+        selections = DaySelections(hotels=hotels, restaurants=restaurants, attractions=attractions)
+        constraints = DayConstraints(
+            items_target=items_target, exclude_outdoor=exclude_outdoor,
+            outdoor_tags=outdoor_tags, need_hotel_checkin=need_hotel_checkin,
+            need_hotel_checkout=need_hotel_checkout, prefer_price_level_max=prefer_price_level_max,
+            cost_lookup=cost_lookup,
+        )
+        plan = _build_day_plan_pure(day, date, anchor, selections, constraints)
+        for it in plan.items:
+            if it.type == "restaurant" and it.listing_id:
+                used_restaurant_ids.add(it.listing_id)
+        return {
+            "items": [
+                {"time": it.time, "end_time": it.end_time, "type": it.type, "listing_id": it.listing_id,
+                 "name": it.name, "lat": it.lat, "lon": it.lon, "est_cost": it.est_cost,
+                 "currency": it.currency, "notes": it.notes}
+                for it in plan.items
+            ],
+            "day_cost": plan.day_cost, "total_km": plan.total_km,
+            "total_travel_min": plan.total_travel_min, "dropped": plan.dropped,
+        }
+
     estimate_costs_tool = StructuredTool.from_function(
         func=_estimate_costs_impl, name="estimate_costs", args_schema=_EstimateCostsArgs,
-        description="Get real per-item costs for a list of candidates, from price data or cost_reference.",
+        description="Get real per-item costs (by id) from price data or cost_reference.",
     )
     build_day_plan_tool = StructuredTool.from_function(
         func=_build_day_plan, name="build_day_plan", args_schema=_BuildDayPlanArgs,
-        description="Build a fully timed, routed day from ranked selections and constraints. "
-                     "Does all routing/timing/arithmetic - never compute these yourself.",
+        description="Build a fully timed, routed day from ranked selections (by id) and constraints. "
+                     "Does all routing/timing/arithmetic/cost lookup - never compute these yourself.",
     )
     check_budget_tool = StructuredTool.from_function(
         func=_check_budget, name="check_budget", args_schema=_CheckBudgetArgs,
         description="Check whether the built days fit the budget; suggests cheapest swaps if not.",
     )
-    travel_matrix_tool = StructuredTool.from_function(
-        coroutine=_travel_matrix, name="travel_matrix", args_schema=_TravelMatrixArgs,
-        description="Get real road travel minutes/km between every origin x destination pair, in one call.",
-    )
-    return [estimate_costs_tool, build_day_plan_tool, check_budget_tool, travel_matrix_tool]
+    return [estimate_costs_tool, build_day_plan_tool, check_budget_tool]

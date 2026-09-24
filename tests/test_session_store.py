@@ -51,7 +51,7 @@ async def test_per_turn_fields_are_not_carried_over():
         clarification_needed="Which destination?",
         completed_steps=["validate", "policy"],
         final_response="some response",
-        candidate_attractions=[{"id": "x"}],
+        candidate_items={"x": {"id": "x"}},
         weather={"current": {}},
         disaster={"safe": True},
         plan_source="fallback",
@@ -61,8 +61,22 @@ async def test_per_turn_fields_are_not_carried_over():
     loaded = await load_session("session-2")
 
     for field in ("user_input", "errors", "clarification_needed", "completed_steps",
-                  "final_response", "candidate_attractions", "weather", "disaster", "plan_source"):
+                  "final_response", "candidate_items", "weather", "disaster", "plan_source"):
         assert field not in loaded
+
+
+async def test_items_per_day_carries_over_so_a_decrement_compounds():
+    # Part 3 (AI_BACKEND_OPTIMIZATION_PLAN.md itinerary-quality plan) - the
+    # whole reason items_per_day exists as its own field rather than
+    # reusing the 3-value pace enum is that a SECOND "even fewer" follow-up
+    # must decrement from what the FIRST follow-up already set, not from
+    # the original pace-derived count again.
+    state = TripState(user_input="Plan a trip to Kandy", destination="Kandy", items_per_day=2)
+
+    await save_session("session-items-per-day", state)
+    loaded = await load_session("session-items-per-day")
+
+    assert loaded["items_per_day"] == 2
 
 
 async def test_second_session_does_not_clobber_first():

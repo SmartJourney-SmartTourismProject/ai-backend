@@ -8,10 +8,13 @@ instead of failing loudly here first.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,28 @@ class PromptSpec:
 # ─────────────────────────── shared rule blocks ───────────────────────────
 # Reused verbatim across multiple prompts so a wording change only needs to
 # happen once - copy-pasted rules are exactly how two prompts drift apart.
+
+def enforce_max_input_chars(spec: PromptSpec, human: str) -> str:
+    """O3 (AI_BACKEND_OPTIMIZATION_PLAN.md): max_input_chars was documented
+    ("guards against a runaway candidate payload getting silently truncated
+    by the provider instead of failing loudly here first") but never
+    actually read anywhere in app/ - a 413 from the provider was the only
+    signal a caller ever got. Called at each agent's human-message
+    construction site, right after building `human`. Trims rather than
+    raises: an oversized payload should still degrade to the best answer the
+    model can give from a truncated view (the same "always produce
+    something" philosophy as run_react's finalization guarantee), not crash
+    the request - but it logs loudly so the truncation is diagnosable
+    instead of silently eating context."""
+    if len(human) <= spec.max_input_chars:
+        return human
+    logger.warning(
+        f"{spec.name}: human message ({len(human)} chars) exceeds max_input_chars "
+        f"({spec.max_input_chars}) - trimming rather than letting the provider "
+        f"silently truncate or reject it."
+    )
+    return human[:spec.max_input_chars]
+
 
 OUTPUT_ONLY_RULE = "Return only the structured object described above. No prose, no markdown, no text outside it."
 

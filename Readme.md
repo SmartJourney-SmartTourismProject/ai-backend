@@ -46,7 +46,7 @@ UI are separate repositories.
    |---|---|
    | `GEMINI_API_KEY` | Slot-filling and itinerary generation (core feature — required) |
    | `OPENWEATHER_API_KEY` | Weather forecasts (optional — degrades to no weather data without it) |
-   | `DATABASE_URL` | Real listings/user/profile data and calendar-token storage (optional — falls back to built-in mock data for Kandy/Ella/Colombo/Galle and a local JSON token file without it). Points at the same database the NestJS backend owns; start it with `docker compose up -d` in `backend/`. |
+   | `DATABASE_URL` | Real listings/user/profile data (required for `/trip-plan` — left blank, every DB-backed lookup fails loudly with `DataUnavailable` rather than falling back to mock data; the Phase 3 Kandy/Ella/Colombo/Galle mock-data fallback was removed). Points at the same database the NestJS backend owns; start it with `docker compose up -d` in `backend/`. |
    | `GOOGLE_CALENDAR_CLIENT_ID` / `_SECRET` | Google Calendar OAuth (optional — calendar features fall back to "no calendar connected") |
    | `REDIS_URL` | Weather/disaster caching (optional — cache fails open, always a live fetch without it) |
 
@@ -88,36 +88,24 @@ python -m uvicorn main:app --port 8001
 pytest
 ```
 
-120+ tests, no network calls, no API keys needed, runs in a few seconds. All external services
+456 tests, no network calls, no API keys needed, runs in about a minute. All external services
 (Gemini, OpenWeather, EONET/USGS/GDACS, PostgreSQL, Google Calendar, Nominatim) are mocked.
 
 ---
 
-## Running the demo UI
+## Trying the API directly
 
-`demo/index.html` is a small, self-contained, independent demo page — a text box for trip
-requests, the generated itinerary, and a map (Leaflet + OpenStreetMap, no API key needed) plotting
-the route with a pin per stop. It's not wired into the FastAPI app at all, so it can be deleted
-without touching any app code.
+The standalone `demo/index.html` page (a text box + map, no API key needed) was removed
+(itinerary-quality/token-reduction pass, Part 6) — the real frontend (`frontend-web/`) is the
+actual demo surface now. To exercise `/trip-plan` without it, `POST` directly:
 
-1. **Start the API server first** (see above).
+```powershell
+curl -X POST http://localhost:8000/trip-plan -H "Content-Type: application/json" `
+  -d '{"message": "Plan a 3-day trip to Kandy, budget $300, interested in culture and history"}'
+```
 
-2. **Serve the demo folder over HTTP** — don't just double-click `index.html` to open it as a
-   `file://` page; some browsers block the page's requests to the API from a `file://` origin with
-   no visible error. Instead:
-
-   ```powershell
-   cd demo
-   python -m http.server 5500
-   ```
-
-   Then open **`http://127.0.0.1:5500/index.html`** in your browser.
-
-3. In the page header, make sure **"API base URL"** matches wherever the server is actually
-   running (`http://localhost:8000` by default, or whatever port you used).
-
-4. Type a trip request and hit Send. Try a follow-up message afterwards (e.g. "make it cheaper")
-   to see multi-turn modification in action — it reuses the same `session_id` automatically.
+Send a follow-up (e.g. "make it cheaper") with the same response's `session_id` to see multi-turn
+modification in action.
 
 ### Example prompts to try
 
@@ -153,8 +141,9 @@ automated testing) rely on the mocked test suite instead of live calls.
 
 ## Documentation
 
-- [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) — the original architecture/contract plan
-- [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md) — current status and what's left to do
-- [`docs/POSTGRES_MIGRATION_PLAN.md`](docs/POSTGRES_MIGRATION_PLAN.md) — the Supabase → PostgreSQL migration (done)
+- [`docs/AI_BACKEND_OPTIMIZATION_PLAN.md`](docs/AI_BACKEND_OPTIMIZATION_PLAN.md) — feature triage, deletions, and the token-ceiling fixes
+- [`docs/build_plan/BUILD_PLAN.md`](docs/build_plan/BUILD_PLAN.md) — the original architecture/contract plan
+- [`docs/build_plan/NEXT_STEPS.md`](docs/build_plan/NEXT_STEPS.md) — current status and what's left to do
+- [`docs/build_plan/POSTGRES_MIGRATION_PLAN.md`](docs/build_plan/POSTGRES_MIGRATION_PLAN.md) — the Supabase → PostgreSQL migration (done)
 - [`../backend/docs/BACKEND_PLAN.md`](../backend/docs/BACKEND_PLAN.md) — the NestJS backend plan, including the shared database schema
-- [`docs/member_B.md`](docs/member_B.md) — cross-track handoff notes
+- [`docs/build_plan/member_B.md`](docs/build_plan/member_B.md) — cross-track handoff notes

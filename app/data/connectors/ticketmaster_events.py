@@ -6,9 +6,13 @@ target local_event's real schema (tags text[], price_min/price_max,
 compound (source, external_ref) uniqueness).
 
 Known gap, unchanged from the old script (confirmed again 2026-09-02): the
-Ticketmaster key returns ~zero events for Sri Lanka. This connector is kept
-running in case that changes; real event coverage is expected to come from
-admin-entered events (NestJS admin panel), not this API - see
+Ticketmaster key returns ~zero events for Sri Lanka. CADENCE is "manual"
+(AI_BACKEND_OPTIMIZATION_PLAN.md C5, changed from "daily") so the nightly
+scheduler sweep (app/data/pipeline.py's _due_connectors) no longer burns API
+quota running this automatically across 25 districts for a result that's
+reliably empty - trigger it explicitly (below, or POST
+/api/admin/sync/events) to re-check. Real event coverage is expected to
+come from admin-entered events (NestJS admin panel), not this API - see
 docs/master_plan/PROJECT_MASTER_PLAN.md §7 risks.
 
     python -m app.data.connectors.ticketmaster_events --district "Kandy"
@@ -34,7 +38,7 @@ SEARCH_RADIUS_KM = 50
 LOOKAHEAD_DAYS = 30
 
 NAME = "ticketmaster_events"
-CADENCE = "daily"
+CADENCE = "manual"
 REQUIRES_KEY = True
 SCOPE = "per_district"
 

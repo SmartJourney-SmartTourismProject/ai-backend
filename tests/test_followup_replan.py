@@ -2,11 +2,14 @@
 # app/core/followup_replan.py's deterministic targeted-day rebuild - no
 # LLM, real DB calls mocked (search_listings_by_district, get_pool).
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import app.core.followup_replan as followup_replan_module
+import app.utils.slot_filling as slot_filling_module
 from app.core.followup_replan import rebuild_targeted_days
 from app.core.state import TripState
+from app.models.schemas import ExtractedSlots
+from app.utils.slot_filling import fill_slots
 
 
 def _hotel(id_="h1", lat=7.29, lon=80.63):
@@ -209,3 +212,75 @@ async def test_rebuilt_day_excludes_what_an_untouched_day_already_uses(monkeypat
 
     day2_ids = {i["listing_id"] for i in state.itinerary[1]["items"] if i["type"] == "attraction"}
     assert "a2" not in day2_ids   # day 3 (untouched) already has it
+
+
+# ---- end-to-end: "fewer destinations per day" actually reduces the count,
+# and persists across a second follow-up (Part 3, itinerary-quality/
+# token-reduction pass). Chains the REAL fill_slots() (LLM mocked, same
+# pattern as tests/test_slot_filling.py) into the REAL rebuild_targeted_days()
+# - not a mock of either - since the bug this fixes was a gap ACROSS these
+# two modules, not inside either one alone.
+
+def _patch_fill_slots_llm(monkeypatch, extracted: ExtractedSlots):
+    monkeypatch.setattr(slot_filling_module, "resolve_place", AsyncMock(return_value={
+        "name": "Kandy", "lat": 7.29, "lon": 80.63, "district_id": "d1",
+        "confidence": "high", "country": "Sri Lanka",
+    }))
+    mock_structured = MagicMock()
+    mock_structured.ainvoke = AsyncMock(return_value=extracted)
+    mock_llm_instance = MagicMock()
+    mock_llm_instance.with_structured_output.return_value = mock_structured
+    monkeypatch.setattr(slot_filling_module, "get_llm", MagicMock(return_value=mock_llm_instance))
+
+
+def _three_item_day(day: int, date: str) -> dict:
+    return {"day": day, "date": date, "day_cost": 0.0, "items": [
+        {"time": t, "end_time": t, "type": "attraction", "listing_id": f"d{day}a{i}",
+         "name": f"Attraction {day}-{i}", "lat": 7.30 + i * 0.001, "lon": 80.64 + i * 0.001,
+         "est_cost": 0.0, "currency": "LKR", "notes": ""}
+        for i, t in enumerate(["09:00", "10:00", "11:00"])
+    ]}
+
+
+async def test_fewer_destinations_per_day_reduces_the_count_end_to_end(monkeypatch):
+    _patch_search(monkeypatch, attractions=_many_attractions(10, prefix="new"))
+    state = TripState(
+        user_input="Can we do fewer destinations per day", destination="Kandy", duration_days=2,
+        is_followup=True, followup_scope="shape_only",
+        trip_context={"destination_name": "Kandy", "district_id": "d1", "lat": 7.29, "lon": 80.63},
+        itinerary=[_three_item_day(1, "2026-10-01"), _three_item_day(2, "2026-10-02")],
+    )
+    _patch_fill_slots_llm(monkeypatch, ExtractedSlots(items_per_day_delta=-1))
+
+    state = await fill_slots(state)
+    assert state.items_per_day == 2   # 3 (pace="balanced" default) - 1
+    assert state.followup_scope == "shape_only"   # no real field changed, routes targeted
+
+    await rebuild_targeted_days(state)
+
+    for day in state.itinerary:
+        attraction_count = len([i for i in day["items"] if i["type"] == "attraction"])
+        assert attraction_count == 2
+
+
+async def test_a_second_fewer_follow_up_compounds_not_resets(monkeypatch):
+    # The actual regression: a second "even fewer" must decrement from what
+    # the FIRST follow-up already set (2), landing on 1 - not silently
+    # reset back to the original pace-derived count (3) each time.
+    _patch_search(monkeypatch, attractions=_many_attractions(10, prefix="new"))
+    state = TripState(
+        user_input="Even fewer please", destination="Kandy", duration_days=2,
+        is_followup=True, followup_scope="shape_only", items_per_day=2,   # carried from turn 2
+        trip_context={"destination_name": "Kandy", "district_id": "d1", "lat": 7.29, "lon": 80.63},
+        itinerary=[_three_item_day(1, "2026-10-01"), _three_item_day(2, "2026-10-02")],
+    )
+    _patch_fill_slots_llm(monkeypatch, ExtractedSlots(items_per_day_delta=-1))
+
+    state = await fill_slots(state)
+    assert state.items_per_day == 1   # 2 - 1, not 3 - 1
+
+    await rebuild_targeted_days(state)
+
+    for day in state.itinerary:
+        attraction_count = len([i for i in day["items"] if i["type"] == "attraction"])
+        assert attraction_count == 1

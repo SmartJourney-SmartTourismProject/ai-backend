@@ -27,7 +27,7 @@ import psycopg2.extras
 import requests
 
 from app.data.connectors.base import (
-    District, ensure_categories, fetch_all_districts, fetch_tag_mapping,
+    District, ensure_categories, fetch_all_districts, fetch_tag_mapping, haversine_km,
 )
 from app.data.postgres_writer import to_point_wkt, upsert_rows
 
@@ -119,15 +119,6 @@ def _query_overpass(query: str, session: requests.Session) -> dict[str, Any]:
         if attempt < 2:
             time.sleep(20)
     return {}
-
-
-def haversine_km(lat1, lon1, lat2, lon2) -> float:
-    import math
-    R = 6371.0
-    dlat, dlon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2
-         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def _category_for(tags: dict[str, str]) -> str:

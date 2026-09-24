@@ -397,7 +397,7 @@ async def test_finalization_forces_json_schema_structured_output_mode():
 
     await run_react(llm, tools=[], messages=[SystemMessage(content="sys")], output_schema=_Answer)
 
-    assert llm.last_with_structured_output_kwargs == {"method": "json_schema"}
+    assert llm.last_with_structured_output_kwargs == {"method": "json_schema", "include_raw": True}
 
 
 async def test_finalize_system_replaces_the_loops_own_system_prompt_when_given():

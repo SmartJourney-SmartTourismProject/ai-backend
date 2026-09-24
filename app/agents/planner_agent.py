@@ -20,6 +20,7 @@ from app.core.result import AgentResult
 from app.core.state import TripState
 from app.models.schemas import PlannerOutput
 from app.prompts import get_prompt
+from app.prompts._base import enforce_max_input_chars
 from app.prompts.planner_prompt import PLANNER_FINALIZE_SYSTEM
 from app.tools.registry import build_planning_tools
 from app.utils.db_pool import get_pool
@@ -55,15 +56,50 @@ async def _fetch_cost_table() -> CostReferenceTable:
     return cost_table
 
 
+async def _fetch_outdoor_tags() -> frozenset[str]:
+    """Same fetch app/core/fallback.py's build_plan() already does - see
+    _fetch_cost_table's own docstring for why this is a deliberate
+    duplicate rather than a shared helper. Needed now (B1,
+    AI_BACKEND_OPTIMIZATION_PLAN.md) because build_day_plan's outdoor_tags
+    argument was dropped: the model had no real way to know the actual tag
+    vocabulary anyway, so it's resolved here and closed over instead."""
+    try:
+        pool = await get_pool()
+    except Exception as e:
+        logger.warning(f"planner_agent: get_pool() failed unexpectedly, degrading to no outdoor filtering: {e}")
+        return frozenset()
+    if pool is None:
+        return frozenset()
+    try:
+        rows = await pool.fetch("SELECT tag FROM tag_vocabulary WHERE is_outdoor = true")
+        return frozenset(r["tag"] for r in rows)
+    except Exception as e:
+        logger.warning(f"planner_agent: tag_vocabulary fetch failed, degrading to no outdoor filtering: {e}")
+        return frozenset()
+
+
+def _build_item_store(state: TripState) -> dict[str, dict]:
+    """id -> full item dict, from the recommendation agent's own selected
+    lists (already merged with real candidate data - see
+    recommendation_agent.py's _flat()). This is what lets build_day_plan/
+    estimate_costs take ids instead of forcing the model to re-emit full
+    item dicts as output tokens (B1) - the server already has this data,
+    it just wasn't being reused."""
+    items = state.hotels + state.restaurants + state.attractions + state.events
+    return {item["id"]: item for item in items if "id" in item}
+
+
 class PlannerAgent(BaseAgent):
     name = "planner"
 
     async def execute(self, state: TripState) -> AgentResult:
         cost_table = await _fetch_cost_table()
-        tools = build_planning_tools(cost_table)
+        outdoor_tags = await _fetch_outdoor_tags()
+        district_id = (state.trip_context or {}).get("district_id")
+        tools = build_planning_tools(cost_table, _build_item_store(state), outdoor_tags, district_id)
 
         spec = get_prompt("planner")
-        human = build_planner_human_message(state)
+        human = enforce_max_input_chars(spec, build_planner_human_message(state))
         messages = [SystemMessage(content=spec.system), HumanMessage(content=human)]
 
         try:
@@ -73,7 +109,7 @@ class PlannerAgent(BaseAgent):
                 finalize_system=PLANNER_FINALIZE_SYSTEM,
             )
         except Exception as e:
-            # Broadened beyond ReActError - see orchestrator_agent.py's
+            # Broadened beyond ReActError - see recommendation_agent.py's
             # identical fix for why (Phase 8, scenario 11: get_llm() itself
             # can raise before run_react is ever entered, and that must
             # degrade the same way a real ReAct failure does, not crash

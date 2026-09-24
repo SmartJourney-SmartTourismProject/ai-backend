@@ -24,8 +24,9 @@ a provider switch transparently to callers.
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -33,19 +34,48 @@ from langchain_groq import ChatGroq
 
 from app.config.settings import settings
 
-Purpose = Literal["slots", "orchestrator", "recommend", "plan", "respond"]
+logger = logging.getLogger(__name__)
+
+Purpose = Literal["slots", "recommend", "plan", "respond"]
 
 # Per-agent output token budgets (DETERMINISM_AND_VALIDATION.md §2 D6c call
 # budget). Deliberately generous for recommend/plan, which carry the
 # candidate payload and a multi-day itinerary; tight for slots/respond,
 # which are single small structured objects / short text.
+#
+# "orchestrator" was a Purpose here until the itinerary-quality/token-
+# reduction pass ("C2") - context resolution (destination/district/date-
+# window/weather/disaster) is now deterministic
+# (app/core/context_resolver.py), not an LLM call at all, so it no longer
+# needs a model, a token budget, or a place in the provider chain.
 _TOKEN_BUDGET: dict[Purpose, int] = {
     "slots": 512,
-    "orchestrator": 1024,
     "recommend": 2048,
     "plan": 3072,
     "respond": 512,
 }
+
+
+def log_token_usage(purpose: str, ai_message: Any) -> None:
+    """Best-effort O5 token accounting (docs/AI_BACKEND_OPTIMIZATION_PLAN.md).
+    There was previously no token counting anywhere in this codebase, which
+    TODO.md names directly as a diagnosis blocker: O1/O2's real payload-size
+    fixes were unverifiable guesses without this. Field names genuinely
+    differ per provider - Groq nests under response_metadata['token_usage'],
+    Gemini under response_metadata['usage_metadata'] - so this checks both,
+    plus LangChain's newer normalized `.usage_metadata` attribute. Never
+    raises: a fake test double or a future provider exposing none of these
+    should degrade to a no-op log, not break the call it's instrumenting."""
+    metadata = getattr(ai_message, "response_metadata", None) or {}
+    usage = metadata.get("token_usage") or metadata.get("usage_metadata")
+    if usage is None:
+        usage = getattr(ai_message, "usage_metadata", None)
+    if usage:
+        logger.info(f"llm token usage purpose={purpose}: {usage}")
+    headers = metadata.get("headers")
+    remaining = headers.get("x-ratelimit-remaining-tokens") if isinstance(headers, dict) else None
+    if remaining is not None:
+        logger.info(f"llm purpose={purpose}: groq x-ratelimit-remaining-tokens={remaining}")
 
 
 def _has_key_for(spec: str) -> bool:
@@ -100,24 +130,16 @@ def get_llm(purpose: Purpose) -> BaseChatModel:
     a chat model is cheap but there is no reason to redo it per call."""
     specs = [s.strip() for s in settings.llm_provider_chain.split(",") if s.strip()]
 
-    if purpose == "orchestrator" and settings.llm_model_orchestrator:
-        specs = [f"gemini:{settings.llm_model_orchestrator}", *specs]
-
     if purpose in _groq_first_purposes():
-        # RecommendationOutput/PlannerOutput's schema (nested lists of
-        # pattern-constrained objects) was live-confirmed 2026-09-03 to
-        # reliably fail against BOTH configured Gemini models with a bare,
-        # non-quota 400 INVALID_ARGUMENT - reproduced with fresh quota, not
-        # a rate limit or a one-off. Groq succeeds reliably on the same
-        # payload once its own token-budget issue was fixed
-        # (react.py's finalize_system + tighter observation trimming).
-        # Trying Gemini first here just burns two guaranteed-failed calls
-        # (and real Gemini quota) before ever reaching the provider that
-        # actually works for this job - this reorder is evidence-based, not
-        # a guess, and deliberately scoped to only the two purposes that
-        # showed this failure (orchestrator's simpler TripContext schema
-        # works fine with Gemini - see AGENT_ARCHITECTURE.md's own live
-        # verification - so it keeps Gemini first).
+        # History (settings.py's own comment has the full story):
+        # RecommendationOutput/PlannerOutput's schema used to reliably fail
+        # against Gemini with a bare 400 INVALID_ARGUMENT, which forced
+        # recommend/plan onto Groq's much smaller 8K TPM free tier. Fixed at
+        # the schema level instead (app/models/schemas.py), so this
+        # setting's shipped default is now empty - Gemini stays first for
+        # every purpose. The reorder mechanism itself stays available and
+        # purpose-name-driven for whichever purpose names the setting lists,
+        # in case a future schema/provider combination needs it again.
         groq_specs = [s for s in specs if s.startswith("groq:")]
         other_specs = [s for s in specs if not s.startswith("groq:")]
         specs = [*groq_specs, *other_specs]

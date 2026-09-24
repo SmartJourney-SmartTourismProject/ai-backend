@@ -91,6 +91,22 @@ def estimate_item_cost(item: dict, category: str, district_id: Optional[str],
     return CostEstimate(None, "LKR", "unknown")
 
 
+def cost_lookup_for(items: list[dict], category: str, district_id: Optional[str],
+                    cost_table: CostReferenceTable) -> dict[str, float]:
+    """id -> real recomputed cost, for every item that resolves to a real
+    value. De-duplicated (itinerary-quality/token-reduction pass, Part 6) -
+    this was a byte-identical private copy in both app/core/fallback.py and
+    app/core/followup_replan.py, with no comment justifying the duplication
+    (unlike this module's `_fetch_cost_table`-style helpers, which ARE
+    deliberately duplicated per caller and say so)."""
+    out: dict[str, float] = {}
+    for item in items:
+        est = estimate_item_cost(item, category, district_id, cost_table)
+        if est.value is not None:
+            out[item["id"]] = est.value
+    return out
+
+
 @dataclass
 class Feasibility:
     feasible: bool
@@ -166,6 +182,32 @@ class BudgetCheck:
     per_category: dict[str, float]
     unknown_cost_items: list[str] = field(default_factory=list)
     cheapest_swaps: list[SwapSuggestion] = field(default_factory=list)
+
+
+def compose_budget_notes(feas: Feasibility, budget_check: BudgetCheck, budget: Optional[float]) -> Optional[str]:
+    """Shared budget_notes narration (itinerary-quality/token-reduction pass,
+    de-duplication). Was inlined only in fallback.py's fresh-plan path;
+    app/core/followup_replan.py's targeted-rebuild path never computed
+    budget_notes at all, so a rebuilt itinerary (e.g. "make it 2 days
+    instead") kept showing the FIRST plan's stale note even after the real
+    cost changed - live-found 2026-09-24: a 2-day rebuild costing 39,506 LKR
+    still displayed "19,011 LKR over budget", a number computed for the
+    original 3-day, 79,011 LKR plan."""
+    budget_notes = None
+    if not feas.feasible:
+        budget_notes = (
+            f"Even the most affordable options come to an estimated {feas.cheapest_total:,.0f} LKR, "
+            f"which is {feas.shortfall:,.0f} LKR over the stated budget."
+        )
+    elif not budget_check.feasible:
+        budget_notes = (
+            f"Estimated cost is {budget_check.total:,.0f} LKR, "
+            f"{budget_check.over_by:,.0f} LKR over the {(budget or 0.0):,.0f} LKR budget."
+        )
+    if budget_check.unknown_cost_items:
+        note = f"{len(budget_check.unknown_cost_items)} item(s) had no price data and are excluded from the total."
+        budget_notes = f"{budget_notes} {note}" if budget_notes else note
+    return budget_notes
 
 
 def check_budget(
