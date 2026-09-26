@@ -2,7 +2,7 @@
 # Pure unit tests - no I/O, no LLM, no mocking needed. Fixed fixtures, since
 # this module is what makes an LLM's claimed output honest (project concern #7).
 
-from app.core.output_validator import ValidationContext, validate
+from app.core.output_validator import ValidationContext, day_scoped_repair_target, validate
 from app.models.schemas import PlannerOutput, ItineraryDay, ItineraryItem
 
 KANDY = {"lat": 7.2906, "lon": 80.6337}
@@ -333,3 +333,50 @@ def test_multiple_failures_all_reported_not_just_the_first():
     result = validate(plan, _ctx(budget=100.0))
     assert result.ok is False
     assert len(result.failures) >= 3   # L1 listing_id, dates_in_window, budget_honest at minimum
+
+
+# ---- day_scoped_repair_target (app/core/orchestrator.py's Tier 4 fast path) --
+
+def test_day_scoped_target_extracts_a_single_day_scoped_failure():
+    failures = ["L2.no_duplicates: day 2 lists 'x' ('Hotel') more than once"]
+    assert day_scoped_repair_target(failures) == {2}
+
+
+def test_day_scoped_target_extracts_multiple_days_across_rules():
+    failures = [
+        "L2.no_absurd_hop: day 1: the hop from 'A' to 'B' is ~90 min, over the 45 min limit",
+        "L2.day_ends_by_curfew: day 3 ends at 23:40, past the 21:00 curfew - drop or move the last item(s)",
+    ]
+    assert day_scoped_repair_target(failures) == {1, 3}
+
+
+def test_day_scoped_target_parses_dates_in_windows_own_tuple_format():
+    # dates_in_window's message shape is different from every other rule
+    # (a list of (day, date) tuples, not a leading "day N") - real case
+    # from this conversation's earlier fallback investigation.
+    failures = ["L2.dates_in_window: day(s) [(2, '2026-09-27')] use a date outside the trip's real window (['2026-09-26'])"]
+    assert day_scoped_repair_target(failures) == {2}
+
+
+def test_day_scoped_target_bails_to_none_on_a_cross_day_failure():
+    # day_count is about the WHOLE itinerary's day count, not any single
+    # day's construction - no amount of rebuilding one day fixes it, so this
+    # must bail rather than guess.
+    failures = ["L2.day_count: plan has 2 day(s), the trip is 3 day(s)"]
+    assert day_scoped_repair_target(failures) is None
+
+
+def test_day_scoped_target_bails_when_any_single_failure_is_unrecognized():
+    # Even one unrecognized/unlocalizable failure bails the WHOLE batch -
+    # partially rebuilding only what's recognized would ship a plan that
+    # still fails the check this function never looked at.
+    failures = [
+        "L2.no_duplicates: day 2 lists 'x' ('Hotel') more than once",
+        "L2.budget_honest: estimated_cost (200000.0) is 50000.00 over the budget (150000.0) and budget_notes is empty - explain the gap",
+    ]
+    assert day_scoped_repair_target(failures) is None
+
+
+def test_day_scoped_target_bails_on_an_l1_referential_failure():
+    failures = ["L1.listing_id: 'x' on day 1 ('Hotel') was never returned by a db_search_* observation"]
+    assert day_scoped_repair_target(failures) is None

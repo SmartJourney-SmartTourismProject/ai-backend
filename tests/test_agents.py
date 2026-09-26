@@ -70,6 +70,34 @@ async def test_recommendation_agent_maps_output_onto_state(monkeypatch):
     assert len(state.recommendations) == 2
 
 
+async def test_recommendation_agent_drops_a_hallucinated_selection(monkeypatch):
+    # L1 referential check at the recommendation agent boundary (2026-09-26,
+    # Tier 3): a listing_id the model invented - never returned by a real
+    # db_search_* observation, unlike _HOTEL_ID/_ATTR_ID from
+    # _recommendation_trace() - must never reach state.hotels/etc with no
+    # real data behind it (the old behavior: _flat() merged it with
+    # observed.get(id, {}) == {}, an item with no lat/lon at all).
+    _FAKE_ID = "99999999-9999-9999-9999-999999999999"
+    output = RecommendationOutput(
+        hotels=[
+            Selection(listing_id=_HOTEL_ID, category="hotel", rank=1, score=0.8, reason="central"),
+            Selection(listing_id=_FAKE_ID, category="hotel", rank=2, score=0.5, reason="invented"),
+        ],
+        restaurants=[], attractions=[], events=[], dropped=[], coverage_notes=[],
+    )
+    monkeypatch.setattr(
+        recommendation_agent_module, "run_react",
+        AsyncMock(return_value=_react_result(output, trace=_recommendation_trace())),
+    )
+
+    state = TripState(user_input="x", destination="Kandy")
+    result = await RecommendationAgent().execute(state)
+
+    assert result.success is True
+    assert [h["id"] for h in state.hotels] == [_HOTEL_ID]   # the real one kept, the invented one dropped
+    assert any("recommendation_hallucinated_drop" in e and _FAKE_ID in e for e in state.errors)
+
+
 async def test_recommendation_agent_records_dropped_items_but_still_succeeds(monkeypatch):
     output = RecommendationOutput(
         hotels=[], restaurants=[], attractions=[], events=[],
@@ -168,9 +196,32 @@ def _planner_output() -> PlannerOutput:
     return PlannerOutput(itinerary=[day], estimated_cost=500.0, budget_notes=None)
 
 
+def _planner_trace() -> list[TraceStep]:
+    # A real build_day_plan observation backing day 1 - since 2026-09-26
+    # (planner_shared.py's unbacked-day rebuild, Tier 2), a day this agent
+    # accepted with NO such observation is force-rebuilt deterministically
+    # from state.hotels/restaurants/attractions, which this test never
+    # populates - so without a matching trace, day 1 would come back empty
+    # (0.0 cost) rather than the model's own output, testing the wrong
+    # thing. This trace is what makes day 1 "backed", matching
+    # _planner_output()'s own day 1 exactly (same day/date/cost/item).
+    return [TraceStep(step=1, tool_calls=[ToolCallTrace(
+        tool="build_day_plan", args={"day": 1, "date": "2026-10-01"},
+        observation={
+            "items": [{"time": "09:00", "end_time": "10:00", "type": "attraction", "listing_id": _ATTR_ID,
+                       "name": "Temple", "lat": 7.30, "lon": 80.64, "est_cost": 500.0,
+                       "currency": "LKR", "notes": ""}],
+            "day_cost": 500.0, "total_km": 1.0, "total_travel_min": 5, "dropped": [],
+        },
+    )])]
+
+
 async def test_planner_agent_populates_itinerary_on_success(monkeypatch):
     monkeypatch.setattr(planner_agent_module, "_fetch_cost_table", AsyncMock(return_value={}))
-    monkeypatch.setattr(planner_agent_module, "run_react", AsyncMock(return_value=_react_result(_planner_output())))
+    monkeypatch.setattr(
+        planner_agent_module, "run_react",
+        AsyncMock(return_value=_react_result(_planner_output(), trace=_planner_trace())),
+    )
 
     state = TripState(user_input="x", destination="Kandy", duration_days=1, budget=1000)
     result = await PlannerAgent().execute(state)

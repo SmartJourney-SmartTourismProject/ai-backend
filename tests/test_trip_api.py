@@ -190,6 +190,30 @@ def test_fresh_request_cache_miss_populates_the_cache(monkeypatch):
     cache_set_mock.assert_awaited_once()
 
 
+def test_fresh_request_fallback_result_is_not_cached(monkeypatch):
+    # Fallback investigation (2026-09-25): caching a fallback result meant a
+    # repeated identical prompt kept replaying that same fallback for a full
+    # cache_ttl even once the LLM path started working again. A fallback
+    # plan is cheap to build fresh (no LLM call), so there's no benefit to
+    # caching it anyway - only "llm" results should ever be cached.
+    class _FakeFallbackPlannerAgent:
+        async def execute(self, state):
+            state.itinerary = [{"day": 1, "date": "2026-10-01", "items": [], "day_cost": 0.0}]
+            state.estimated_cost = 0.0
+            state.budget_notes = None
+            state.plan_source = "fallback"
+            return _FakeAgentResult(success=True)
+
+    cache_set_mock = _patch_everything(monkeypatch)
+    monkeypatch.setattr(orchestrator_module, "PlannerAgent", _FakeFallbackPlannerAgent)
+
+    resp = client.post("/trip-plan", json={"message": "Plan a trip to Kandy"})
+
+    assert resp.status_code == 200
+    assert resp.json()["plan_source"] == "fallback"
+    cache_set_mock.assert_not_awaited()
+
+
 def test_fresh_request_cache_hit_skips_the_graph_but_gets_a_new_session_id(monkeypatch):
     cached = {
         "user_input": "Plan a trip to Kandy",

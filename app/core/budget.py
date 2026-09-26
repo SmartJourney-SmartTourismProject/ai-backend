@@ -144,18 +144,24 @@ def feasibility(
     # cost_reference's seed data) - no special-casing needed, the estimate
     # chain already returns 0.0 for those.
 
-    # Hotel cost is charged exactly twice regardless of trip length - once
-    # at check-in, once at check-out (app/core/itinerary.py's build_day_plan
-    # emits the hotel on day 1 and again on the last day, never per-night).
-    # Multiplying by duration_days here used to overstate the true floor for
-    # any trip that wasn't exactly 2 days - live-found 2026-09-06: a 3-day
-    # Kandy trip reported "even the cheapest options come to 118,517 LKR"
-    # while the actual delivered plan cost only 79,011 LKR, a floor that was
-    # literally higher than reality. Matching the real charge count fixes
-    # the contradiction (duration_days=2 is unaffected either way, since
-    # 2 nights and "2 emits" coincide - see test_feasibility_uses_cheapest_hotel_and_restaurant).
-    hotel_charges = 2 if hotels else 0
-    cheapest_total = (hotel_cost * hotel_charges) + (meal_cost * 2 * duration_days)
+    # Hotel cost is charged once, for the WHOLE stay, at check-in -
+    # app/core/itinerary.py's build_day_plan bills nightly_rate * hotel_nights
+    # on day 1 and emits check-out as a free closing bookend, never a second
+    # charge. Multiplying by duration_days here used to overstate the true
+    # floor for any trip that wasn't exactly 2 days - live-found 2026-09-06:
+    # a 3-day Kandy trip reported "even the cheapest options come to 118,517
+    # LKR" while the actual delivered plan cost only 79,011 LKR, a floor that
+    # was literally higher than reality. That was first "fixed" by charging
+    # hotel_cost a flat 2x regardless of duration - which matched the
+    # 2-day case in front of it at the time, but the real quantity was never
+    # "2 emits", it's nights stayed: a flat 2x instead UNDERSTATES the floor
+    # for any trip longer than 2 days (live-found 2026-09-26: a 1->5 day
+    # follow-up left this floor at 2 nights' worth of hotel cost while the
+    # actual plan billed 4). hotel_nights = duration_days - 1 is the same
+    # quantity build_day_plan itself uses (see planner_shared.py's
+    # fill_missing_days and orchestrator.py's _fallback_node).
+    hotel_nights = max(duration_days - 1, 0) if hotels else 0
+    cheapest_total = (hotel_cost * hotel_nights) + (meal_cost * 2 * duration_days)
     unknown = u1 + u2
 
     return Feasibility(

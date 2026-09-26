@@ -66,7 +66,6 @@ def test_build_day_plan_drops_a_single_far_hop_early_in_the_day():
     # in the day, since nothing has accumulated yet by the time it's
     # considered - Rangala Natural Pool (a real ~63-minute hop) was exactly
     # the *second* stop, well under any cumulative budget at that point.
-    # This is what max_single_hop_minutes (45.0 default) exists for.
     #
     # a1's expensive edge is set in BOTH directions (itinerary-quality/
     # token-reduction pass, same reasoning as the sibling test above) -
@@ -74,6 +73,14 @@ def test_build_day_plan_drops_a_single_far_hop_early_in_the_day():
     # of from ANCHOR, which would defeat the "genuinely unreachable" case
     # this test means to exercise. ANCHOR->a2 stays on the haversine
     # fallback (cheap), so a2 is visited first either way.
+    #
+    # The DROP here is now attributed to max_anchor_minutes rather than
+    # max_single_hop_minutes (2026-09-26): this fixture's far hop is
+    # measured FROM THE ANCHOR (63 min > the 45-minute leash), so the
+    # absolute leash catches it one stage earlier, before routing. Same
+    # outcome, more accurate reason. The sibling test above still covers
+    # max_single_hop_minutes for a far hop BETWEEN two stops that are each
+    # near the anchor, which the leash can't see.
     matrix = TravelMatrix()
     matrix.set(ANCHOR, ATTRACTION_1, 63.0)   # the lone far hop, right at the start
     matrix.set(ATTRACTION_1, ATTRACTION_2, 5.0)
@@ -83,20 +90,82 @@ def test_build_day_plan_drops_a_single_far_hop_early_in_the_day():
 
     attraction_ids = [i.listing_id for i in plan.items if i.type == "attraction"]
     assert attraction_ids == ["a2"]
-    assert plan.dropped == [{"id": "a1", "reason": "would_exceed_daily_travel_budget"}]
+    assert plan.dropped == [{"id": "a1", "reason": "too_far_from_day_anchor"}]
 
 
-def test_build_day_plan_travel_budget_cap_never_drops_meals():
-    # A meal slot is worse to lose than a slightly fuller day - the cap
-    # only ever applies to attractions.
+def test_build_day_plan_leashes_a_stop_reached_by_individually_legal_hops():
+    # Live-found 2026-09-26 (a real 5-day Galle plan's day 4, measured
+    # against the live DB): hotel -> Shark view point 39.2min -> Hikkaduwa
+    # Coral Reef 1.7min -> Andahelena Ella 40.5min. Every hop was under the
+    # 45-minute single-hop cap and the running total stayed under the
+    # 180-minute cumulative cap, so nothing rejected it - yet the last stop
+    # sat 58.3 minutes from the hotel, putting one lone marker far inland on
+    # an otherwise coastal map. Both relative caps are blind to this; only
+    # an absolute leash from the anchor catches it.
+    matrix = TravelMatrix()
+    matrix.set(ANCHOR, ATTRACTION_1, 39.0)          # legal hop out
+    matrix.set(ATTRACTION_1, ATTRACTION_2, 40.0)    # legal hop onward...
+    matrix.set(ATTRACTION_2, ATTRACTION_1, 40.0)
+    matrix.set(ANCHOR, ATTRACTION_2, 58.0)          # ...but 58min from base
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
+
+    attraction_ids = [i.listing_id for i in plan.items if i.type == "attraction"]
+    assert attraction_ids == ["a1"]
+    assert plan.dropped == [{"id": "a2", "reason": "too_far_from_day_anchor"}]
+
+
+def test_build_day_plan_anchor_leash_can_be_disabled():
+    # None disables the leash - the escape hatch for a caller that
+    # genuinely wants an unbounded day (and the proof that the two stops
+    # below are otherwise perfectly schedulable, so the test above is
+    # isolating the leash and nothing else).
+    matrix = TravelMatrix()
+    matrix.set(ANCHOR, ATTRACTION_1, 39.0)
+    matrix.set(ATTRACTION_1, ATTRACTION_2, 40.0)
+    matrix.set(ATTRACTION_2, ATTRACTION_1, 40.0)
+    matrix.set(ANCHOR, ATTRACTION_2, 58.0)
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False,
+                                 max_anchor_minutes=None)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
+
+    assert [i.listing_id for i in plan.items if i.type == "attraction"] == ["a1", "a2"]
+    assert plan.dropped == []
+
+
+def test_build_day_plan_travel_budget_cap_never_drops_meals_when_a_reachable_one_exists():
+    # A meal slot is worse to lose than a slightly fuller day - the
+    # cumulative travel-budget cap only ever applies to attractions. But
+    # this doesn't mean ANY restaurant is forced regardless of distance
+    # (see the sibling test below) - RESTAURANT_2 is close and reachable,
+    # so it's what should be picked over the far RESTAURANT.
+    matrix = TravelMatrix()
+    matrix.set(ANCHOR, ATTRACTION_1, 20.0)
+    matrix.set(ATTRACTION_1, RESTAURANT, 200.0)
+    matrix.set(ATTRACTION_1, RESTAURANT_2, 10.0)
+    constraints = DayConstraints(items_target=1, include_lunch=False, include_dinner=True)
+    selections = _selections(restaurants=[RESTAURANT, RESTAURANT_2])
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, selections, constraints, matrix)
+
+    restaurant_items = [i for i in plan.items if i.type == "restaurant"]
+    assert [i.listing_id for i in restaurant_items] == ["r2"]
+
+
+def test_build_day_plan_skips_a_meal_no_candidate_can_reach_rather_than_violate_the_hop_cap():
+    # Regression (fallback investigation, 2026-09-25): the old fallback
+    # chain forced the globally nearest restaurant even at a 200-minute hop,
+    # which output_validator.no_absurd_hop then rejected - the exact plan
+    # this function just built failed its own stated cap. Skipping the meal
+    # (recorded in `dropped`) is the correct degrade when every candidate is
+    # genuinely unreachable within max_single_hop_minutes.
     matrix = TravelMatrix()
     matrix.set(ANCHOR, ATTRACTION_1, 20.0)
     matrix.set(ATTRACTION_1, RESTAURANT, 200.0)
     constraints = DayConstraints(items_target=1, include_lunch=False, include_dinner=True)
     plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
 
-    restaurant_items = [i for i in plan.items if i.type == "restaurant"]
-    assert len(restaurant_items) == 1
+    assert [i.type for i in plan.items] == ["attraction"]
+    assert {"id": "r1", "reason": "restaurant_unreachable"} in plan.dropped
 
 
 def test_build_day_plan_respects_items_target_limit():

@@ -15,7 +15,10 @@ from app.core.base_agent import BaseAgent
 from app.core.budget import CostReferenceTable
 from app.core.llm import get_llm
 from app.core.react import ReActConfig, run_react
-from app.core.planner_shared import build_planner_human_message
+from app.core.planner_shared import (
+    assemble_planner_days, build_planner_human_message, enforce_budget_notes, fill_missing_days,
+    resolve_day_context, resolve_planner_max_steps,
+)
 from app.core.result import AgentResult
 from app.core.state import TripState
 from app.models.schemas import PlannerOutput
@@ -96,7 +99,8 @@ class PlannerAgent(BaseAgent):
         cost_table = await _fetch_cost_table()
         outdoor_tags = await _fetch_outdoor_tags()
         district_id = (state.trip_context or {}).get("district_id")
-        tools = build_planning_tools(cost_table, _build_item_store(state), outdoor_tags, district_id)
+        day_context = resolve_day_context(state)
+        tools = build_planning_tools(cost_table, _build_item_store(state), outdoor_tags, district_id, day_context)
 
         spec = get_prompt("planner")
         human = enforce_max_input_chars(spec, build_planner_human_message(state))
@@ -105,7 +109,8 @@ class PlannerAgent(BaseAgent):
         try:
             result = await run_react(
                 llm=get_llm("plan"), tools=tools, messages=messages,
-                output_schema=PlannerOutput, config=ReActConfig(),
+                output_schema=PlannerOutput,
+                config=ReActConfig(max_steps=resolve_planner_max_steps(state.duration_days)),
                 finalize_system=PLANNER_FINALIZE_SYSTEM,
             )
         except Exception as e:
@@ -119,10 +124,37 @@ class PlannerAgent(BaseAgent):
             return AgentResult(success=False, error=str(e))
 
         output: PlannerOutput = result.output
-        state.planner_output = output.model_dump()
-        state.itinerary = [d.model_dump() for d in output.itinerary]
-        state.estimated_cost = output.estimated_cost
-        state.budget_notes = output.budget_notes
+        assembled_days, warnings, unbacked_days = assemble_planner_days(result.trace, output.itinerary)
+        # unbacked_days (2026-09-26): a day assemble_planner_days accepted
+        # from the model's OWN transcription, with no build_day_plan
+        # observation behind it - fill_missing_days now rebuilds these the
+        # same deterministic way it already rebuilds a genuinely missing
+        # day, instead of letting the one day most likely to break a rule
+        # sail through to validation completely unchecked.
+        assembled_days, fill_warnings = fill_missing_days(
+            state, assembled_days, cost_table, force_rebuild_days=unbacked_days,
+        )
+        warnings = warnings + fill_warnings
+        if warnings:
+            logger.warning(f"PlannerAgent day assembly: {'; '.join(warnings)}")
+            state.errors.append(f"planner_day_assembly: {'; '.join(warnings)}")
+
+        estimated_cost = round(sum(d.day_cost for d in assembled_days), 2)
+        assembled_output = PlannerOutput(
+            itinerary=assembled_days,
+            estimated_cost=estimated_cost,
+            # currency (Part 5, server-side enforcement): always LKR, never
+            # the model's own claim - output_validator.py's currency rule
+            # already requires this on every item; enforcing it at the plan
+            # level too means a model that just forgets the field can no
+            # longer fail that check over nothing more than an omission.
+            currency="LKR",
+            budget_notes=enforce_budget_notes(output.budget_notes, estimated_cost, state.budget),
+        )
+        state.planner_output = assembled_output.model_dump()
+        state.itinerary = [d.model_dump() for d in assembled_days]
+        state.estimated_cost = assembled_output.estimated_cost
+        state.budget_notes = assembled_output.budget_notes
         state.plan_source = "llm"
 
         state.react_traces["planner"] = {

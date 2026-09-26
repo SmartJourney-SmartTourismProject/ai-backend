@@ -132,6 +132,26 @@ class Settings(BaseSettings):
     # 2026-09-02 so tuning this is one number, not four call sites.
     react_tool_budget: int = 12
 
+    # ===== Repair loop (AGENT_ARCHITECTURE.md §3.5) =====
+    # A second repair attempt used to be impossible outright
+    # (_route_after_verify only ever allowed repair_attempts == 0 through) -
+    # raised to 2 (2026-09-26, user decision) since a stochastic failure
+    # (as opposed to a systematic one - see repair_temperature_step's own
+    # comment) has a real, independent chance of passing on a second try.
+    # _route_after_verify's own no-progress guard is what keeps this from
+    # just paying for two identical failures when the cause IS systematic.
+    max_repair_attempts: int = 2
+    # Each repair attempt raises the model's temperature by this much over
+    # settings.llm_temperature (attempt 1: +0.1, attempt 2: +0.2 for the
+    # default max_repair_attempts=2) - a repair re-sends the EXACT same
+    # prompt/candidates as the failed attempt before it, so at temperature
+    # 0 it has a real chance of reproducing the identical wrong answer
+    # verbatim. A small, escalating nudge gives each retry an actual chance
+    # of landing somewhere different, without the plan-quality cost of a
+    # high temperature on the original (unrepaired) call, which stays at
+    # llm_temperature throughout.
+    repair_temperature_step: float = 0.1
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

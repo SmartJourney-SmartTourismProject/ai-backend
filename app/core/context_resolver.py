@@ -60,9 +60,35 @@ async def _resolve_date_window(state: TripState) -> dict:
     if state.trip_dates:
         window = state.trip_dates[0]
         start, end = window.get("start_date"), window.get("end_date")
-        if start and end:
-            return {"start_date": start, "end_date": end, "source": "user",
-                    "dates": _dates_in_window(start, end)}
+        # The source this window was ORIGINALLY resolved with (written back
+        # by this function below) - not "user" unconditionally, which used
+        # to relabel a carried calendar/default window as "user" the moment
+        # it round-tripped through state, losing the distinction the
+        # calendar branch below actually needs (see the "calendar" handling
+        # a few lines down).
+        source = window.get("source", "user")
+        if start and end and source != "calendar":
+            # A carried window's day count can go stale: a follow-up that
+            # changes duration_days (e.g. "make it 5 days") doesn't touch
+            # trip_dates, so a window resolved for the OLD duration would
+            # otherwise be reused as-is - live-found 2026-09-26, a 1->N day
+            # follow-up kept a 1-date window while duration_days became N,
+            # so every day past day 1 failed L2's dates_in_window and the
+            # request fell all the way to the deterministic fallback planner.
+            # start_date is kept (it's the real answer to "when does the
+            # trip begin"); only end_date/dates are recomputed against the
+            # CURRENT duration.
+            dates = _dates_in_window(start, end)
+            if len(dates) != duration:
+                end = (date_cls.fromisoformat(start) + timedelta(days=duration - 1)).isoformat()
+                dates = _dates_in_window(start, end)
+            return {"start_date": start, "end_date": end, "source": source, "dates": dates}
+        # source == "calendar": deliberately NOT reused as-is even when
+        # start/end are present - a calendar window was only ever checked
+        # long enough for duration AT THE TIME it was resolved (the
+        # `>= duration` guard below). Silently keeping it after duration grew
+        # could book the user over their own busy days instead of
+        # re-checking free_ranges against the new, larger duration.
 
     if state.user_id:
         try:
@@ -166,7 +192,10 @@ async def resolve_trip_context(state: TripState) -> None:
             "safety_notes": safety_notes,
             "context_confidence": context_confidence,
         }
-        state.trip_dates = [{"start_date": date_window["start_date"], "end_date": date_window["end_date"]}]
+        state.trip_dates = [{
+            "start_date": date_window["start_date"], "end_date": date_window["end_date"],
+            "source": date_window["source"],
+        }]
         state.weather = {"forecast": per_day_weather}
         state.disaster = disaster
         if safety_notes:

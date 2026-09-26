@@ -155,3 +155,111 @@ def test_build_day_plan_tool_never_repeats_a_restaurant_across_days():
     # throughout this codebase.
     day2_restaurant_ids = {i["listing_id"] for i in day2["items"] if i["type"] == "restaurant"}
     assert day2_restaurant_ids == {"r1"}
+
+
+# ---- day_context: server-side enforcement (Part 5, prompt-improvement pass) --
+# build_day_plan's day/date/check-in/check-out/exclude_outdoor/items_target
+# arguments are all facts the server already knows for certain once a
+# DayContext is supplied - these prove they're corrected against ground
+# truth rather than trusted from the model's own call, per _build_day_plan's
+# own comment in app/tools/registry.py.
+
+from datetime import date as date_cls
+
+from app.core.planner_shared import DayContext
+
+_ATTRACTION = {"id": "a1", "name": "Temple", "lat": 7.30, "lon": 80.64, "currency": "LKR", "tags": []}
+_HOTEL = {"id": "h1", "name": "Hotel", "lat": 7.29, "lon": 80.63, "currency": "LKR"}
+
+
+def test_day_context_derives_the_real_date_ignoring_the_models_own_arg():
+    day_context = DayContext(start_date=date_cls(2026, 10, 1), duration_days=3)
+    tools = registry.build_planning_tools({}, {"a1": _ATTRACTION}, day_context=day_context)
+    tool = next(t for t in tools if t.name == "build_day_plan")
+
+    result = tool.invoke({
+        "day": 2, "date": "2099-01-01",   # deliberately wrong - should be ignored
+        "anchor": {"lat": 7.29, "lon": 80.63}, "attraction_ids": ["a1"],
+    })
+    assert result["date"] == "2026-10-02"
+    assert result["day"] == 2
+
+
+def test_day_context_clamps_an_out_of_range_day_to_the_trip_length():
+    day_context = DayContext(start_date=date_cls(2026, 10, 1), duration_days=3)
+    tools = registry.build_planning_tools({}, {"a1": _ATTRACTION}, day_context=day_context)
+    tool = next(t for t in tools if t.name == "build_day_plan")
+
+    result = tool.invoke({
+        "day": 7, "date": "2026-10-07",   # past the 3-day trip
+        "anchor": {"lat": 7.29, "lon": 80.63}, "attraction_ids": ["a1"],
+    })
+    assert result["day"] == 3
+    assert result["date"] == "2026-10-03"
+
+
+def test_day_context_forces_checkin_on_day_one_and_checkout_on_the_last_day():
+    day_context = DayContext(start_date=date_cls(2026, 10, 1), duration_days=2)
+    tools = registry.build_planning_tools({}, {"h1": _HOTEL}, day_context=day_context)
+    tool = next(t for t in tools if t.name == "build_day_plan")
+
+    day1 = tool.invoke({
+        "day": 1, "date": "2026-10-01", "anchor": {"lat": 7.29, "lon": 80.63},
+        "hotel_ids": ["h1"], "need_hotel_checkin": False, "need_hotel_checkout": True,   # both deliberately wrong
+    })
+    assert [i["type"] for i in day1["items"]] == ["hotel"]   # check-in forced on, check-out forced off
+
+    day2 = tool.invoke({
+        "day": 2, "date": "2026-10-02", "anchor": {"lat": 7.29, "lon": 80.63},
+        "hotel_ids": ["h1"], "need_hotel_checkin": True, "need_hotel_checkout": False,   # both deliberately wrong
+    })
+    assert [i["type"] for i in day2["items"]] == ["hotel"]   # check-out forced on, check-in forced off (no duplicate)
+
+
+def test_day_context_forces_exclude_outdoor_on_a_rainy_day_but_never_forces_it_off():
+    day_context = DayContext(
+        start_date=date_cls(2026, 10, 1), duration_days=1,
+        per_day_rain_probability={"2026-10-01": 0.9},
+    )
+    outdoor_attraction = {**_ATTRACTION, "tags": ["hike"]}
+    tools = registry.build_planning_tools(
+        {}, {"a1": outdoor_attraction}, outdoor_tags=frozenset({"hike"}), day_context=day_context,
+    )
+    tool = next(t for t in tools if t.name == "build_day_plan")
+
+    result = tool.invoke({
+        "day": 1, "date": "2026-10-01", "anchor": {"lat": 7.29, "lon": 80.63},
+        "attraction_ids": ["a1"], "exclude_outdoor": False,   # the model says it's fine - overridden by real rain
+    })
+    assert result["items"] == []   # the only candidate was outdoor-tagged, and rain forces exclusion
+
+
+def test_day_context_clamps_items_target_to_the_travelers_pace_but_not_below_it():
+    day_context = DayContext(start_date=date_cls(2026, 10, 1), duration_days=1, expected_items_per_day=2)
+    attractions = {f"a{i}": {"id": f"a{i}", "name": f"A{i}", "lat": 7.29 + i * 0.01, "lon": 80.63,
+                             "currency": "LKR", "tags": []} for i in range(5)}
+    tools = registry.build_planning_tools({}, attractions, day_context=day_context)
+    tool = next(t for t in tools if t.name == "build_day_plan")
+
+    over = tool.invoke({
+        "day": 1, "date": "2026-10-01", "anchor": {"lat": 7.29, "lon": 80.63},
+        "attraction_ids": list(attractions), "items_target": 5,   # asks for more than the pace allows
+    })
+    assert len([i for i in over["items"] if i["type"] == "attraction"]) == 2
+
+    under = tool.invoke({
+        "day": 1, "date": "2026-10-01", "anchor": {"lat": 7.29, "lon": 80.63},
+        "attraction_ids": list(attractions), "items_target": 1,   # a genuine follow-up asking for fewer
+    })
+    assert len([i for i in under["items"] if i["type"] == "attraction"]) == 1
+
+
+def test_no_day_context_keeps_the_old_behavior_of_trusting_the_models_args():
+    tools = registry.build_planning_tools({}, {"a1": _ATTRACTION})   # no day_context, as every existing caller does
+    tool = next(t for t in tools if t.name == "build_day_plan")
+
+    result = tool.invoke({
+        "day": 9, "date": "2099-01-01", "anchor": {"lat": 7.29, "lon": 80.63}, "attraction_ids": ["a1"],
+    })
+    assert result["day"] == 9
+    assert result["date"] == "2099-01-01"

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -87,20 +87,30 @@ def _has_key_for(spec: str) -> bool:
     return False
 
 
-def _build(spec: str, purpose: Purpose) -> BaseChatModel:
+def _build(spec: str, purpose: Purpose, temperature: Optional[float]) -> BaseChatModel:
     """spec is "<provider>:<model>". Field names genuinely differ between
     the two client classes (verified against their pydantic model_fields,
     not assumed) - ChatGroq has no top_p and calls its timeout param
     request_timeout, for instance - so this branches per provider rather
-    than sharing one kwargs dict."""
+    than sharing one kwargs dict.
+
+    `temperature`: None (the common case) means "settings.llm_temperature,
+    unchanged" - only a caller that deliberately wants a different value
+    (app/core/orchestrator.py's _repair_node, escalating per attempt - see
+    settings.repair_temperature_step) passes one explicitly. Clamped to
+    [0.0, 1.0]: both providers accept a wider range, but nothing in this
+    codebase has a reason to ask for more randomness than that, and a
+    caller that computes a runaway value (a config typo, an off-by-one
+    attempt count) shouldn't silently get an unbounded one."""
     provider, model = spec.split(":", 1)
     max_tokens = _TOKEN_BUDGET[purpose]
+    real_temperature = settings.llm_temperature if temperature is None else max(0.0, min(1.0, temperature))
 
     if provider == "gemini":
         return ChatGoogleGenerativeAI(
             model=model,
             google_api_key=settings.gemini_api_key,
-            temperature=settings.llm_temperature,
+            temperature=real_temperature,
             top_p=settings.llm_top_p,
             top_k=settings.llm_top_k,
             max_output_tokens=max_tokens,
@@ -111,7 +121,7 @@ def _build(spec: str, purpose: Purpose) -> BaseChatModel:
         return ChatGroq(
             model_name=model,
             groq_api_key=settings.groq_api_key,
-            temperature=settings.llm_temperature,
+            temperature=real_temperature,
             max_tokens=max_tokens,
             request_timeout=settings.llm_timeout_s,
             max_retries=0,
@@ -123,11 +133,13 @@ def _groq_first_purposes() -> set[str]:
     return {p.strip() for p in settings.llm_provider_chain_groq_first_purposes.split(",") if p.strip()}
 
 
-@lru_cache(maxsize=16)
-def get_llm(purpose: Purpose) -> BaseChatModel:
+@lru_cache(maxsize=32)
+def get_llm(purpose: Purpose, temperature: Optional[float] = None) -> BaseChatModel:
     """Returns the primary model for `purpose` with the rest of the
-    provider chain attached as fallbacks. Cached per purpose - constructing
-    a chat model is cheap but there is no reason to redo it per call."""
+    provider chain attached as fallbacks. Cached per (purpose, temperature) -
+    constructing a chat model is cheap but there is no reason to redo it per
+    call; maxsize raised from 16 since a repair attempt now asks for a
+    handful of distinct temperatures per purpose on top of the default."""
     specs = [s.strip() for s in settings.llm_provider_chain.split(",") if s.strip()]
 
     if purpose in _groq_first_purposes():
@@ -152,5 +164,5 @@ def get_llm(purpose: Purpose) -> BaseChatModel:
             "docs/master_plan/API_SETUP.md."
         )
 
-    primary, *rest = (_build(s, purpose) for s in usable)
+    primary, *rest = (_build(s, purpose, temperature) for s in usable)
     return primary.with_fallbacks(rest) if rest else primary

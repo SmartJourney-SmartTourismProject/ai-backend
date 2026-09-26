@@ -55,6 +55,58 @@ async def test_uses_carried_trip_dates_as_the_user_source_when_present(monkeypat
     }
 
 
+async def test_stale_carried_window_is_recomputed_against_new_duration(monkeypatch):
+    # Live-found 2026-09-26: a follow-up that grows duration_days (e.g.
+    # "make it 5 days") doesn't touch trip_dates, so the carried window was
+    # still the OLD 1-day range. dates_in_window then rejected every day
+    # past day 1 (they were derived from start_date but weren't in the
+    # window), sending a perfectly good plan through repair -> fallback.
+    # start_date is kept; only end_date/dates should be recomputed.
+    _patch_happy_path(monkeypatch)
+    state = TripState(
+        user_input="x", destination="Kandy", duration_days=5,
+        trip_dates=[{"start_date": "2026-09-26", "end_date": "2026-09-26", "source": "user"}],
+    )
+
+    await resolve_trip_context(state)
+
+    window = state.trip_context["date_window"]
+    assert window["start_date"] == "2026-09-26"
+    assert window["end_date"] == "2026-09-30"
+    assert window["source"] == "user"
+    assert window["dates"] == [
+        "2026-09-26", "2026-09-27", "2026-09-28", "2026-09-29", "2026-09-30",
+    ]
+
+
+async def test_stale_carried_calendar_window_is_rechecked_not_reused(monkeypatch):
+    # A carried "calendar" window was only ever verified free for the
+    # duration AT THE TIME it was resolved (the >= duration guard in
+    # get_free_days below) - reusing it as-is after duration grows could
+    # silently book the traveller over their own busy days. It must be
+    # re-derived from a fresh free_days lookup against the NEW duration.
+    today = datetime.now(timezone.utc).date()
+    long_start = (today + timedelta(days=5)).isoformat()
+    long_end = (today + timedelta(days=8)).isoformat()   # 4 days free
+    _patch_happy_path(monkeypatch, free_days=[
+        {"start_date": long_start, "end_date": long_end},
+    ])
+    state = TripState(
+        user_input="x", destination="Kandy", duration_days=4, user_id="u1",
+        # Carried from an earlier, shorter-duration turn - a single day
+        # taken from the middle of the real free range, which would be
+        # invalid as a 4-day window's start on its own.
+        trip_dates=[{"start_date": long_start, "end_date": long_start, "source": "calendar"}],
+    )
+
+    await resolve_trip_context(state)
+
+    window = state.trip_context["date_window"]
+    assert window["source"] == "calendar"
+    assert window["start_date"] == long_start
+    assert len(window["dates"]) == 4
+
+
 async def test_uses_the_soonest_long_enough_calendar_window(monkeypatch):
     today = datetime.now(timezone.utc).date()
     short_start = (today + timedelta(days=1)).isoformat()

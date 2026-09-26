@@ -125,6 +125,14 @@ class TripState(BaseModel):
     # never a second repair.
     repair_attempts: int = 0
     validation_failures: List[str] = Field(default_factory=list)
+    # The failure set a repair attempt was actually trying to fix, snapshotted
+    # right before routing to "repair" - compared against the NEXT verify's
+    # validation_failures by _route_after_verify's no-progress guard. An
+    # identical set means the repair changed nothing that mattered (most
+    # often a systematic failure the model can't fix by retrying the same
+    # prompt - see settings.repair_temperature_step's own comment), so
+    # further identical attempts are skipped rather than paid for.
+    previous_validation_failures: List[str] = Field(default_factory=list)
 
     # "llm" (planner agent succeeded and passed validation, possibly after
     # one repair) or "fallback" (app/core/fallback.py's zero-LLM planner).

@@ -71,6 +71,29 @@ def _observed_pools(trace: list[TraceStep]) -> dict[str, list[dict]]:
     return {category: list(items.values()) for category, items in pools.items()}
 
 
+def _drop_unobserved(selections: list, observed: dict[str, dict]) -> tuple[list, list[str]]:
+    """L1 referential check (mirrors app/core/output_validator.py's
+    validate_referential), applied HERE at the recommendation agent
+    boundary rather than only downstream on the planner's final output.
+    Before this, a listing_id the model invented - never returned by a real
+    db_search_* observation - passed straight through: _flat() below merges
+    it with `observed.get(s.listing_id, {})`, which is `{}` for an
+    unobserved id, so the item reaches state.attractions/etc with NO real
+    data at all (no lat/lon, no tags, no price_level) and flows straight
+    into the planner agent as a legitimate candidate. That's a hallucinated
+    selection turning into a broken plan two agents downstream, with
+    nothing checking it in between until the planner's OWN output hits L1 -
+    by which point a whole ReAct planning run has already been spent
+    reasoning about a listing that was never real."""
+    kept, dropped_ids = [], []
+    for s in selections:
+        if s.listing_id in observed:
+            kept.append(s)
+        else:
+            dropped_ids.append(s.listing_id)
+    return kept, dropped_ids
+
+
 class RecommendationAgent(BaseAgent):
     name = "recommendation"
 
@@ -141,11 +164,25 @@ class RecommendationAgent(BaseAgent):
                 })
             return out
 
-        state.hotels = _flat(output.hotels)
-        state.restaurants = _flat(output.restaurants)
-        state.attractions = _flat(output.attractions)
-        state.events = _flat(output.events)
+        all_dropped_ids: list[str] = []
+
+        def _validated(selections):
+            kept, dropped_ids = _drop_unobserved(selections, observed)
+            all_dropped_ids.extend(dropped_ids)
+            return _flat(kept)
+
+        state.hotels = _validated(output.hotels)
+        state.restaurants = _validated(output.restaurants)
+        state.attractions = _validated(output.attractions)
+        state.events = _validated(output.events)
         state.recommendations = state.hotels + state.restaurants + state.attractions + state.events
+
+        if all_dropped_ids:
+            logger.warning(f"RecommendationAgent: dropped {len(all_dropped_ids)} hallucinated selection(s): {all_dropped_ids}")
+            state.errors.append(
+                f"recommendation_hallucinated_drop: {len(all_dropped_ids)} selection(s) referenced "
+                f"a listing_id no db_search_* call ever observed and were dropped: {all_dropped_ids}"
+            )
 
         state.react_traces["recommendation"] = {
             "steps_used": result.steps_used, "tools_used": result.tools_used,

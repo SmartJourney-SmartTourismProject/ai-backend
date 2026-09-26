@@ -80,3 +80,40 @@ def test_empty_groq_first_setting_disables_reordering_entirely(monkeypatch):
     monkeypatch.setattr(settings, "llm_provider_chain_groq_first_purposes", "")
     specs = _chain_specs("recommend")
     assert specs[0].startswith("gemini:")
+
+
+# ---- temperature override (2026-09-26, settings.repair_temperature_step) --
+
+def _temperature_of(model) -> float:
+    return model.temperature
+
+
+def test_get_llm_defaults_to_settings_temperature():
+    llm = get_llm("plan")
+    primary = llm.runnable if hasattr(llm, "runnable") else llm
+    assert _temperature_of(primary) == settings.llm_temperature
+
+
+def test_get_llm_temperature_override_applies_to_every_model_in_the_chain():
+    # A repair attempt's escalated temperature must reach every provider in
+    # the fallback chain, not just the primary - a request that fails over
+    # to Groq mid-repair should still get the escalated value, not silently
+    # drop back to settings.llm_temperature.
+    llm = get_llm("plan", temperature=0.3)
+    primary = llm.runnable if hasattr(llm, "runnable") else llm
+    fallbacks = llm.fallbacks if hasattr(llm, "fallbacks") else []
+    for model in (primary, *fallbacks):
+        assert _temperature_of(model) == pytest.approx(0.3)
+
+
+def test_get_llm_temperature_is_clamped_to_one():
+    llm = get_llm("plan", temperature=5.0)
+    primary = llm.runnable if hasattr(llm, "runnable") else llm
+    assert _temperature_of(primary) == 1.0
+
+
+def test_get_llm_caches_separately_per_temperature():
+    default_llm = get_llm("plan")
+    bumped_llm = get_llm("plan", temperature=0.2)
+    assert default_llm is not bumped_llm
+    assert get_llm("plan", temperature=0.2) is bumped_llm   # still cached

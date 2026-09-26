@@ -29,6 +29,7 @@ recommendation prompt's own one-call-per-category rule.
 """
 from __future__ import annotations
 
+from datetime import date as date_cls, timedelta
 from typing import Optional
 
 from langchain_core.tools import StructuredTool
@@ -38,6 +39,8 @@ from app.tools.db_tool import search_listings_by_district
 from app.core.scoring import ScoringContext, TravelMatrix, rank
 from app.core.budget import CostReferenceTable, estimate_item_cost, check_budget as _check_budget_pure
 from app.core.itinerary import DayConstraints, DaySelections, build_day_plan as _build_day_plan_pure
+from app.core.output_validator import WEATHER_RAIN_THRESHOLD
+from app.core.planner_shared import DayContext
 
 
 def _resolve_ids(ids: list[str], item_store: dict[str, dict]) -> list[dict]:
@@ -207,6 +210,7 @@ def build_planning_tools(
     item_store: Optional[dict[str, dict]] = None,
     outdoor_tags: frozenset[str] = frozenset(),
     district_id: Optional[str] = None,
+    day_context: Optional[DayContext] = None,
 ) -> list[StructuredTool]:
     """`item_store` (id -> full item dict, built by the caller from
     state.hotels/restaurants/attractions/events - see planner_agent.py) and
@@ -215,7 +219,15 @@ def build_planning_tools(
     `build_day_plan` need real DB-derived data no LLM call should have to
     carry back and forth. item_store defaults to {} (not None) so a caller
     that doesn't pass one - e.g. an existing test - degrades to "nothing
-    resolves" rather than crashing on a NoneType lookup."""
+    resolves" rather than crashing on a NoneType lookup.
+
+    `day_context` (Part 5, server-side enforcement) is what lets
+    build_day_plan correct the model's day/date/check-in/check-out/
+    exclude_outdoor/items_target arguments against real trip facts instead
+    of trusting them outright - see _build_day_plan's own comment for what's
+    corrected and why. Optional (defaults to None, meaning "trust the
+    model's args as before") so an existing caller/test that doesn't pass
+    one keeps its old behavior exactly."""
     item_store = item_store or {}
     # Shared ACROSS every build_day_plan call this request makes (not reset
     # per call) - same cross-day dedup convention app/core/fallback.py's
@@ -262,14 +274,52 @@ def build_planning_tools(
             **_cost_lookup_for(restaurants, "restaurant"),
             **_cost_lookup_for(attractions, "attraction"),
         }
+
+        # Part 5 (server-side enforcement, prompt-improvement pass): day,
+        # date, check-in/out, weather-driven exclude_outdoor, and
+        # items_target are all facts the server already knows for certain -
+        # trusting the model's own values for them let a wrong turn (a
+        # mis-numbered day, a stale date, a forgotten weather check) produce
+        # exactly the output_validator.py failures (day_count,
+        # dates_in_window, weather_respect, items_per_day_respected) that
+        # then cost a whole repair round trip over something that was never
+        # a real planning decision. Corrected here, once, for every caller -
+        # not just re-checked after the fact.
+        real_day = day
+        real_date = date
+        real_checkin = need_hotel_checkin
+        real_checkout = need_hotel_checkout
+        real_exclude_outdoor = exclude_outdoor
+        real_items_target = items_target
+        if day_context is not None:
+            real_day = min(max(day, 1), day_context.duration_days)
+            real_date = (day_context.start_date + timedelta(days=real_day - 1)).isoformat()
+            # Full override, not just a floor/ceiling - matches
+            # app/core/fallback.py's own `day_num == 1`/`day_num ==
+            # duration_days` convention, the ground truth every other path
+            # already uses for a single-hotel-per-trip itinerary.
+            real_checkin = real_day == 1 and bool(hotels)
+            real_checkout = real_day == day_context.duration_days and bool(hotels)
+            # The model may EXCLUDE outdoor items on its own judgement even
+            # on a clear day (never overridden to False here) - only a real
+            # rain_probability >= WEATHER_RAIN_THRESHOLD can force it True,
+            # matching output_validator.py's weather_respect rule exactly.
+            rain_p = day_context.per_day_rain_probability.get(real_date, 0.0)
+            real_exclude_outdoor = exclude_outdoor or (rain_p >= WEATHER_RAIN_THRESHOLD)
+            # Upper bound only - a follow-up asking for FEWER items/day
+            # (state.items_per_day) is a real, smaller target the model
+            # should still be free to request; only an attempt to exceed the
+            # traveler's stated pace is corrected.
+            real_items_target = min(items_target, day_context.expected_items_per_day)
+
         selections = DaySelections(hotels=hotels, restaurants=restaurants, attractions=attractions)
         constraints = DayConstraints(
-            items_target=items_target, exclude_outdoor=exclude_outdoor,
-            outdoor_tags=outdoor_tags, need_hotel_checkin=need_hotel_checkin,
-            need_hotel_checkout=need_hotel_checkout, prefer_price_level_max=prefer_price_level_max,
+            items_target=real_items_target, exclude_outdoor=real_exclude_outdoor,
+            outdoor_tags=outdoor_tags, need_hotel_checkin=real_checkin,
+            need_hotel_checkout=real_checkout, prefer_price_level_max=prefer_price_level_max,
             cost_lookup=cost_lookup,
         )
-        plan = _build_day_plan_pure(day, date, anchor, selections, constraints)
+        plan = _build_day_plan_pure(real_day, real_date, anchor, selections, constraints)
         for it in plan.items:
             if it.type == "restaurant" and it.listing_id:
                 used_restaurant_ids.add(it.listing_id)
@@ -282,6 +332,13 @@ def build_planning_tools(
             ],
             "day_cost": plan.day_cost, "total_km": plan.total_km,
             "total_travel_min": plan.total_travel_min, "dropped": plan.dropped,
+            # "day"/"date": the server-corrected values, not the model's raw
+            # args - app/core/planner_shared.py's assemble_planner_days()
+            # now prefers these over the model's own transcription (see its
+            # own comment for why: the finalize step doesn't always copy a
+            # tool observation correctly even when the observation itself is
+            # right).
+            "day": real_day, "date": real_date,
         }
 
     estimate_costs_tool = StructuredTool.from_function(

@@ -28,6 +28,9 @@ listed in the FAILURES message below and return the corrected object. Change not
 else - do not re-plan, re-rank, or restate parts of the output that passed validation.
 
 CONSTRAINTS
+- You have a LIMITED number of turns. If more than one day needs a fresh
+  build_day_plan call, issue ALL of those calls TOGETHER in the same turn, not one
+  per turn - they do not depend on each other's results.
 - Use only listing_ids that already appeared in this conversation's tool observations.
 - Do not re-rank anything. Do not add or remove days beyond what was already there,
   unless a listed failure specifically requires it (e.g. day_count).
@@ -38,7 +41,13 @@ CONSTRAINTS
 
 REPAIR_SPEC = PromptSpec(
     name="repair",
-    version="2.0.0",
+    # 2.1.0: batches multi-day build_day_plan calls into one turn (fallback
+    # investigation, 2026-09-25) - a real repair ran out of steps rebuilding
+    # 3 days one turn at a time. app/core/orchestrator.py's _repair_node
+    # also now reassembles the final itinerary from these tool observations
+    # directly (see app/core/planner_shared.assemble_planner_days), rather
+    # than trusting the finalize step's transcription.
+    version="2.1.0",
     system=REPAIR_SYSTEM_PROMPT,
     output_schema=RepairedPlannerOutput,
 )

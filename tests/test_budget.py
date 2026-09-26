@@ -132,24 +132,38 @@ def test_feasibility_uses_cheapest_hotel_and_restaurant():
         {"id": "h2", "price_per_night": 5000.0, "currency": "LKR"},   # cheapest
     ]
     restaurants = [{"id": "r1", "price_min": 1000.0, "currency": "LKR"}]
-    # 2 nights: 5000*2 + 1000*2*2 (2 meals/day) = 10000 + 4000 = 14000
+    # A 2-day trip is 1 night: 5000*1 + 1000*2*2 (2 meals/day) = 5000 + 4000 = 9000
     result = feasibility(hotels, restaurants, [], 2, 20000.0, None, {})
-    assert result.cheapest_total == pytest.approx(14000.0)
+    assert result.cheapest_total == pytest.approx(9000.0)
     assert result.feasible is True
 
 
-def test_feasibility_hotel_charged_twice_not_per_day():
+def test_feasibility_hotel_charged_by_nights_not_per_day():
     # Regression test for a live bug (2026-09-06): a 3-day trip reported
     # "even the cheapest options come to 118,517 LKR" while the actual
     # delivered plan cost only 79,011 LKR - a "floor" higher than reality,
     # because this used to multiply hotel cost by duration_days while the
-    # real planner (itinerary.py) only ever charges the hotel twice
-    # (check-in + check-out), regardless of trip length.
+    # real planner (itinerary.py) only ever charges the WHOLE stay once, at
+    # check-in (nightly_rate * hotel_nights), with check-out a free bookend.
     hotels = [{"id": "h1", "price_per_night": 20000.0, "currency": "LKR"}]
     restaurants = [{"id": "r1", "price_min": 1000.0, "currency": "LKR"}]
-    # 3 days: hotel charged twice (not 3x) + 1000*2*3 meals = 40000 + 6000
+    # 3 days = 2 nights: 20000*2 + 1000*2*3 meals = 40000 + 6000
     result = feasibility(hotels, restaurants, [], 3, 100000.0, None, {})
     assert result.cheapest_total == pytest.approx(46000.0)
+
+
+def test_feasibility_hotel_cost_scales_with_longer_stays():
+    # A flat "charge twice regardless of length" (the first, overcorrected
+    # fix for the 2026-09-06 bug above) coincidentally matched the 3-day case
+    # right above (2 nights == "2 emits"), but silently UNDERSTATED the floor
+    # for anything longer - live-found 2026-09-26, a 1->5 day follow-up left
+    # this floor at 2 nights' worth of hotel cost while the actual delivered
+    # plan billed 4. Nights must scale with duration_days.
+    hotels = [{"id": "h1", "price_per_night": 20000.0, "currency": "LKR"}]
+    restaurants = [{"id": "r1", "price_min": 1000.0, "currency": "LKR"}]
+    # 5 days = 4 nights: 20000*4 + 1000*2*5 meals = 80000 + 10000
+    result = feasibility(hotels, restaurants, [], 5, 200000.0, None, {})
+    assert result.cheapest_total == pytest.approx(90000.0)
 
 
 def test_feasibility_no_hotels_charges_nothing_for_stay():

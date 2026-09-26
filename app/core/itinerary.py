@@ -10,7 +10,7 @@ contract: `build_day_plan(day, date, anchor, selections, constraints) ->
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -47,6 +47,22 @@ DINNER_TIME = "19:00"
 # SAME cap this module already enforces on the deterministic path, instead
 # of a second, driftable copy of the number.
 DEFAULT_MAX_SINGLE_HOP_MINUTES = 45.0
+# An absolute leash from the day's own base (start_location on day 1, the
+# hotel afterwards). Every other travel cap in this module is RELATIVE -
+# max_single_hop_minutes bounds one consecutive leg, max_travel_minutes
+# bounds the running total - and a chain of individually-legal hops can
+# still walk the traveller steadily away from where they're sleeping.
+# Live-found 2026-09-26, a real 5-day Galle plan's day 4 (measured against
+# the live DB): hotel -> Shark view point 39.2min, -> Hikkaduwa Coral Reef
+# 1.7min, -> Andahelena Ella 40.5min. Every hop passed the 45-minute cap
+# and the running total stayed under 180, yet the last stop sat 58.3min /
+# 25.2km from the hotel, which is what put one lone marker far inland on
+# an otherwise coastal map. Same 45 minutes as the single-hop cap, and
+# deliberately so: no stop should be further from your base than one
+# reasonable hop, since the traveller pays that distance twice (out and
+# back). It keeps the genuine Galle->Hikkaduwa coastal run (39-42min) and
+# drops only the true outlier.
+DEFAULT_MAX_ANCHOR_MINUTES = 45.0
 
 
 def _dwell_for(item: dict, item_type: str) -> int:
@@ -110,6 +126,13 @@ class DayConstraints:
     # catches a single hop that's unreasonable on its own, regardless of
     # where in the day it falls.
     max_single_hop_minutes: float = DEFAULT_MAX_SINGLE_HOP_MINUTES
+    # The absolute leash described at DEFAULT_MAX_ANCHOR_MINUTES - bounds
+    # how far any single attraction may sit from the day's anchor, which
+    # neither of the two caps above can express (they're both relative).
+    # Attractions only, matching max_travel_minutes' own scope: meals are
+    # chosen by proximity to the route that survives this filter, so they
+    # follow it automatically and are never dropped for it. None disables.
+    max_anchor_minutes: Optional[float] = DEFAULT_MAX_ANCHOR_MINUTES
     # DAY_END (itinerary-quality/token-reduction pass): the real fix for
     # Defect 2 ("too many places in a day") - the travel caps above bound
     # TRAVEL time only; nothing previously bounded total elapsed time
@@ -223,6 +246,28 @@ def _cost_of(item: dict, cost_lookup: dict[str, float]) -> float:
     return cost_lookup.get(item["id"], 0.0)
 
 
+def _first_violation(plan: DayPlan, constraints: DayConstraints, travel_minutes) -> Optional[tuple[str, str]]:
+    """The first curfew/hop violation in a finished day that dropping an
+    attraction can actually fix, as (attraction_id, reason) - or None.
+    Mirrors app/core/output_validator.py's day_ends_by_curfew and
+    no_absurd_hop rules (consecutive items only, not the anchor leg), so a
+    day this accepts is a day the validator accepts too. A hop between two
+    non-attraction stops (e.g. a far restaurant straight after check-in)
+    isn't returned: no attraction drop can change it."""
+    attractions = [i for i in plan.items if i.type == "attraction"]
+    if not attractions:
+        return None
+    for prev, cur in zip(plan.items, plan.items[1:]):
+        hop = travel_minutes({"lat": prev.lat, "lon": prev.lon}, {"lat": cur.lat, "lon": cur.lon})
+        if hop > constraints.max_single_hop_minutes:
+            culprit = cur if cur.type == "attraction" else prev if prev.type == "attraction" else None
+            if culprit is not None:
+                return culprit.listing_id, "would_exceed_daily_travel_budget"
+    if max(i.end_time for i in plan.items) > constraints.day_end:
+        return attractions[-1].listing_id, "day_would_run_past_end"
+    return None
+
+
 def build_day_plan(
     day: int,
     date: str,
@@ -231,7 +276,43 @@ def build_day_plan(
     constraints: DayConstraints,
     matrix: Optional[TravelMatrix] = None,
 ) -> DayPlan:
+    """Builds the day, then re-checks the FINISHED day against the curfew
+    and single-hop cap and drops one attraction at a time until it passes.
+    The simulation inside _build_day_plan_once can only approximate what
+    follows the last attraction - lunch, the 19:00 dinner floor, the
+    check-out leg and its dwell - so it let packed-pace days run to ~22:30
+    (found by running fallback plans through output_validator.validate()).
+    This loop is exact: it checks the real emitted times. Terminates because
+    every pass removes one attraction; the rebuilt day is the previous day
+    minus that one stop (items_target drops with it, so no lower-ranked
+    attraction is pulled in to replace it)."""
     matrix = matrix or TravelMatrix()
+
+    def travel_minutes(a: dict, b: dict) -> float:
+        m = matrix.minutes(a, b)
+        return m if m is not None else haversine_minutes(a, b)
+
+    extra_dropped: list[dict] = []
+    plan = _build_day_plan_once(day, date, anchor, selections, constraints, matrix)
+    while (violation := _first_violation(plan, constraints, travel_minutes)) is not None:
+        drop_id, reason = violation
+        kept = sum(1 for i in plan.items if i.type == "attraction")
+        extra_dropped.append({"id": drop_id, "reason": reason})
+        selections = replace(selections, attractions=[a for a in selections.attractions if a["id"] != drop_id])
+        constraints = replace(constraints, items_target=kept - 1)
+        plan = _build_day_plan_once(day, date, anchor, selections, constraints, matrix)
+    plan.dropped = plan.dropped + extra_dropped
+    return plan
+
+
+def _build_day_plan_once(
+    day: int,
+    date: str,
+    anchor: dict,
+    selections: DaySelections,
+    constraints: DayConstraints,
+    matrix: TravelMatrix,
+) -> DayPlan:
     dropped: list[dict] = []
     items: list[ItineraryItem] = []
     total_km = 0.0
@@ -316,6 +397,15 @@ def build_day_plan(
            a["price_level"] > constraints.prefer_price_level_max:
             dropped.append({"id": a["id"], "reason": "over_price_ceiling"})
             continue
+        # Absolute distance from the day's base, measured BEFORE routing -
+        # see DEFAULT_MAX_ANCHOR_MINUTES. Done here rather than in the
+        # feasibility simulation below because this isn't about whether the
+        # day still fits the clock (it demonstrably did, in the live case
+        # this fixes); it's that the stop doesn't belong in this day at all.
+        if constraints.max_anchor_minutes is not None and \
+           travel_minutes(anchor, a) > constraints.max_anchor_minutes:
+            dropped.append({"id": a["id"], "reason": "too_far_from_day_anchor"})
+            continue
         accepted_attractions.append(a)
 
     # 3. Route: nearest-neighbour construction + 2-opt improvement, both
@@ -344,11 +434,16 @@ def build_day_plan(
     #     checkout leg depend on wherever the route actually ends, which
     #     this simulation is still deciding), using a fixed, conservative
     #     nominal minutes rather than a real distance computation.
-    _RESERVE_DINNER_MIN = DWELL_MINUTES["restaurant"] + 15
+    _RESERVE_MEAL_MIN = DWELL_MINUTES["restaurant"] + 15
     _RESERVE_CHECKOUT_MIN = 15
     reserve = 0
+    # Lunch is emitted in between attractions (or forced at the end), so its
+    # dwell lands inside this same walk - it was never reserved before, which
+    # is why packed-pace days overran DAY_END by over an hour.
+    if constraints.include_lunch and selections.restaurants:
+        reserve += _RESERVE_MEAL_MIN
     if constraints.include_dinner and selections.restaurants:
-        reserve += _RESERVE_DINNER_MIN
+        reserve += _RESERVE_MEAL_MIN
     if constraints.need_hotel_checkout and selections.hotels:
         reserve += _RESERVE_CHECKOUT_MIN
     day_end_minutes = _hhmm_to_minutes(constraints.day_end)
@@ -404,21 +499,54 @@ def build_day_plan(
     #    could be - and was - selected for both lunch and dinner.
     used_restaurant_ids: set[str] = set()
 
-    def nearest_restaurant(near: dict) -> Optional[dict]:
-        # Prefer a restaurant not already used today; if none is left
-        # (a genuinely small real candidate pool), reuse is still better
-        # than leaving a meal slot empty - same "degrade, don't omit"
-        # philosophy as everywhere else in this module.
+    def nearest_restaurant(near: dict, then: Optional[dict] = None, then_type: str = "attraction") -> Optional[dict]:
+        # Prefer a restaurant not already used today; if none is left (a
+        # genuinely small real candidate pool), reuse is still better than
+        # leaving a meal slot empty - same "degrade, don't omit" philosophy
+        # as everywhere else in this module. But this now only reuses among
+        # REACHABLE restaurants: both legs (in, and out to `then`, the next
+        # stop, when known) under max_single_hop_minutes, AND the projected
+        # finish time - not just the restaurant's own dwell, but `then`'s
+        # arrival + dwell too, when `then` is known - within day_end.
+        # Found live (fallback investigation, 2026-09-25): the old fallback
+        # chain ended in `or selections.restaurants`, forcing the globally
+        # nearest restaurant regardless of hop length or what it pushed past
+        # curfew - including, for a DINNER pick, the checkout leg that
+        # follows it (each leg individually under the hop cap, but their sum
+        # still landing after day_end - e.g. dinner 19:00-20:00, checkout
+        # 20:35-21:05, five minutes past a 21:00 curfew). Returning None
+        # here (meal skipped, see _emit_lunch/the dinner call site) is the
+        # correct degrade when the candidate pool is simply too sparse near
+        # this point - a missed meal is recorded and visible, not a plan
+        # that silently violates its own stated caps.
+        cap = constraints.max_single_hop_minutes
+        day_end_minutes = _hhmm_to_minutes(constraints.day_end)
+        cur_minutes = _hhmm_to_minutes(clock)
+
+        def reachable(r: dict) -> bool:
+            hop_in = travel_minutes(near, r)
+            if hop_in > cap:
+                return False
+            finish = cur_minutes + hop_in + DWELL_MINUTES["restaurant"]
+            if then is not None:
+                hop_out = travel_minutes(r, then)
+                if hop_out > cap:
+                    return False
+                finish += hop_out + _dwell_for(then, then_type)
+            return finish <= day_end_minutes
+
         fresh = [r for r in selections.restaurants if r["id"] not in used_restaurant_ids]
-        candidates = fresh or selections.restaurants
+        candidates = [r for r in fresh if reachable(r)] or [r for r in selections.restaurants if reachable(r)]
         return min(candidates, key=lambda r: haversine_km(near, r)) if candidates else None
 
-    def _emit_lunch() -> None:
+    def _emit_lunch(then: Optional[dict] = None) -> None:
         nonlocal current_point
-        lunch = nearest_restaurant(current_point)
+        lunch = nearest_restaurant(current_point, then)
         if lunch:
             current_point = emit(lunch, "restaurant", current_point)
             used_restaurant_ids.add(lunch["id"])
+        elif selections.restaurants:
+            dropped.append({"id": selections.restaurants[0]["id"], "reason": "restaurant_unreachable"})
 
     # The simulation already vetted every attraction in ordered_attractions
     # against both travel caps; this re-check is a safety net for the rare
@@ -433,7 +561,7 @@ def build_day_plan(
             continue
 
         if not lunch_done and clock >= LUNCH_TIME:
-            _emit_lunch()
+            _emit_lunch(then=item_dict)
             lunch_done = True
 
         current_point = emit(item_dict, "attraction", current_point)
@@ -444,21 +572,31 @@ def build_day_plan(
     if not lunch_done:
         _emit_lunch()
 
+    # Same-day check-in and check-out (a 1-day trip, or an LLM setting both
+    # flags on one day) would list the same hotel twice in one day - which
+    # output_validator's no_duplicates rejects, so every 1-day plan failed
+    # validation. Check-in already put the hotel in the day; skip the
+    # closing bookend.
+    emit_checkout = constraints.need_hotel_checkout and bool(selections.hotels) and not constraints.need_hotel_checkin
+    checkout_point = selections.hotels[0] if emit_checkout else None
+
     if constraints.include_dinner and selections.restaurants:
         if clock < DINNER_TIME:
             # An idle gap, not a real travel/dwell leg - still monotone, so
             # the "times strictly increasing" invariant holds.
             clock = DINNER_TIME
-        dinner = nearest_restaurant(current_point)
+        dinner = nearest_restaurant(current_point, then=checkout_point, then_type="hotel")
         if dinner:
             current_point = emit(dinner, "restaurant", current_point)
             used_restaurant_ids.add(dinner["id"])
+        else:
+            dropped.append({"id": selections.restaurants[0]["id"], "reason": "restaurant_unreachable"})
 
     # 5. Hotel check-out, if this is the departure day (no new dwell time,
     #    no additional cost - the whole stay was already charged at
     #    check-in above; this just closes the day at the hotel for
     #    map/route completeness).
-    if constraints.need_hotel_checkout and selections.hotels:
+    if emit_checkout:
         emit(selections.hotels[0], "hotel", current_point, cost_override=0.0)
 
     return DayPlan(

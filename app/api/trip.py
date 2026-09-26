@@ -133,7 +133,14 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
 
         result = await orchestrator.ainvoke(initial_state)
 
-        if cache_key and not result.get("clarification_needed"):
+        # Only cache a real LLM plan. Caching a fallback result meant a
+        # repeated identical prompt kept replaying that same fallback for a
+        # full cache_ttl even after the LLM path itself started working
+        # again - live-found (fallback investigation, 2026-09-25) to be the
+        # single biggest reason later "fallback" responses looked
+        # unchanged. A fallback plan is fast to build fresh (no LLM call),
+        # so there's no real caching benefit to it anyway.
+        if cache_key and not result.get("clarification_needed") and result.get("plan_source") == "llm":
             await cache_set(cache_key, result, settings.cache_ttl)
 
     await save_session(session_id, TripState(**result))
