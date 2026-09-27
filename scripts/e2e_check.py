@@ -218,7 +218,7 @@ async def scenario_7() -> tuple[bool, str]:
             ],
         }
 
-    with patch("app.tools.registry.get_weather", _rainy_weather):
+    with patch("app.core.context_resolver.get_weather", _rainy_weather):
         state = TripState(user_input="Plan a 1-day trip to Kandy, budget LKR 30000, I like nature and hiking")
         result = await _invoke(state)
 
@@ -248,7 +248,7 @@ async def scenario_8() -> tuple[bool, str]:
             }],
         }
 
-    with patch("app.tools.registry.get_disaster_info", _red_disaster):
+    with patch("app.core.context_resolver.get_disaster_info", _red_disaster):
         state = TripState(user_input="Plan a 1-day trip to Kandy, budget LKR 30000")
         result = await _invoke(state)
 
@@ -270,7 +270,7 @@ async def scenario_9() -> tuple[bool, str]:
     async def _fake_free_days(user_id, window_days=30):
         return free_days
 
-    with patch("app.tools.registry.get_free_days", _fake_free_days):
+    with patch("app.core.context_resolver.get_free_days", _fake_free_days):
         state = TripState(user_input="Plan a trip to Kandy", user_id=str(uuid.uuid4()))
         result = await _invoke(state)
 
