@@ -59,6 +59,9 @@ pydantic_core==2.46.4
 Pygments==2.20.0
 pyparsing==3.3.2
 pytest==9.1.1
+pytest-asyncio==1.4.0
+respx==0.23.1
+itsdangerous==2.2.0
 python-dotenv==1.2.2
 pytokens==0.4.1
 PyYAML==6.0.3
