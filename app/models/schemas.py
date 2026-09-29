@@ -116,6 +116,9 @@ class StartLocation(BaseModel):
     lat: float
     lon: float
     source: Literal["gps", "ip", "text"]
+    # Only set when the traveler named the place ("from Galle"); a GPS or IP
+    # fix has coordinates but no name worth showing.
+    name: Optional[str] = None
 
 
 class DateWindow(BaseModel):

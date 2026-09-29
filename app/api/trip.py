@@ -73,6 +73,11 @@ class TripPlanResponse(BaseModel):
     data_freshness: Optional[str] = None
     weather: Optional[dict] = None
     disaster: Optional[dict] = None
+    # Where the trip departs from, when it is known - {lat, lon, source, name}.
+    # The itinerary lists stops at the DESTINATION only, so without this the
+    # client has no way to draw "Galle to Kandy" as anything but Kandy: the
+    # origin is never a stop, and the map had nothing else to plot.
+    start_location: Optional[dict] = None
     final_response: Optional[str] = None
     errors: list[str] = []
     # Debug-only, per §7 - never populated unless settings.debug=True.
@@ -163,6 +168,7 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
         data_freshness=await get_data_freshness(),
         weather=result.get("weather"),
         disaster=result.get("disaster"),
+        start_location=result.get("start_location"),
         final_response=result.get("final_response"),
         errors=result.get("errors", []),
         trace=trace,

@@ -106,13 +106,26 @@ async def fill_slots(state: TripState) -> TripState:
         # it always takes priority. This applies on both first turns and
         # follow-ups: "I'm starting from Polonnaruwa" is exactly as useful
         # said on message 2 as on message 1, whenever GPS/IP failed.
-        if state.start_location is None and result.origin_location:
+        # An origin the traveler actually typed beats an IP lookup. IP
+        # geolocation answers "where is this browser", which is not the
+        # question: someone sitting in Kandy can plan a trip that departs from
+        # Galle, and "Galle to Kandy" then silently planned from Kandy because
+        # the IP guess had already filled start_location before this ran.
+        # GPS still wins - it is a precise fix on the same intent, and a
+        # traveler who granted location access is telling us where they are.
+        stated_origin_may_override = (
+            state.start_location is None or state.start_location.get("source") == "ip"
+        )
+        if stated_origin_may_override and result.origin_location:
             origin_coords = await geocode_destination(result.origin_location)
             if origin_coords:
                 state.start_location = {
                     "lat": origin_coords["lat"],
                     "lon": origin_coords["lon"],
                     "source": "text",
+                    # Carried so the UI can label the route's first point
+                    # rather than showing an unexplained pin.
+                    "name": result.origin_location,
                 }
 
     except Exception as e:
