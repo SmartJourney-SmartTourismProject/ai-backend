@@ -7,6 +7,29 @@ import app.tools.calendar_tool as calendar_tool
 import app.tools.weather_tool as weather_tool
 import app.tools.disaster_tool as disaster_tool
 import app.utils.session_store as session_store
+from app.config.settings import settings
+
+# Keys that gate a code path BEFORE the mocked call it protects. Both of these
+# short-circuit on an empty value - llm.py drops Groq from the provider chain
+# (`return bool(settings.groq_api_key)`), and routing_tool.py returns a
+# haversine estimate without issuing any HTTP request at all - so a suite run
+# on a machine whose .env lacks them fails tests that respx has correctly
+# mocked, for reasons that have nothing to do with the code under test.
+#
+# CI already supplies exactly these as `ci-placeholder` env vars
+# (.github/workflows/ci.yml), which is why those runs are green while a local
+# run is not. Setting them here makes the suite self-contained instead of
+# depending on whichever keys a given developer happens to hold.
+#
+# Never a real key, and never a real call: every test that reaches a provider
+# mocks the transport. A test that specifically needs a key ABSENT monkeypatches
+# it to "" itself (see test_no_ors_key_falls_back_to_haversine_without_a_call),
+# and that runs after this fixture, so it still wins.
+_PLACEHOLDER_KEYS = {
+    "gemini_api_key": "test-placeholder",
+    "groq_api_key": "test-placeholder",
+    "ors_api_key": "test-placeholder",
+}
 
 
 class _FakeCache:
@@ -26,6 +49,15 @@ class _FakeCache:
 
     async def set(self, key, value, ttl_seconds):
         self.store[key] = value
+
+
+@pytest.fixture(autouse=True)
+def _placeholder_api_keys(monkeypatch):
+    """Gives every test the same key-gated code paths CI gets, regardless of
+    what is in the developer's .env."""
+    for field, value in _PLACEHOLDER_KEYS.items():
+        if not getattr(settings, field, ""):
+            monkeypatch.setattr(settings, field, value)
 
 
 @pytest.fixture(autouse=True)
