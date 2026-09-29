@@ -16,6 +16,9 @@ from typing import Optional
 
 CostReferenceTable = dict[tuple[Optional[str], str, int], dict]   # (district_id, category, price_level) -> {unit, typical_cost, currency}
 
+# Mid of the 1-4 band, used when a listing carries no price_level of its own.
+_ASSUMED_PRICE_LEVEL = 2
+
 # Base allocation, adjusted by travel_style. One dict, tunable in one place.
 DEFAULT_SPLIT = {"stay": 0.40, "food": 0.25, "activity": 0.20, "transport": 0.15}
 SPLIT_BY_STYLE = {
@@ -53,7 +56,7 @@ def budget_per_day(budget: Optional[float], duration_days: int, travel_style: Op
 class CostEstimate:
     value: Optional[float]
     currency: str
-    basis: str   # "exact" | "reference" | "national" | "unknown"
+    basis: str   # "exact" | "reference" | "national" | "assumed" | "unknown"
 
 
 def estimate_item_cost(item: dict, category: str, district_id: Optional[str],
@@ -87,6 +90,24 @@ def estimate_item_cost(item: dict, category: str, district_id: Optional[str],
         row = cost_table.get((None, category, level))
         if row is not None:
             return CostEstimate(float(row["typical_cost"]), row.get("currency", "LKR"), "national")
+
+    # Nothing knows this item's price band. OSM, which supplies almost every
+    # listing, records price_level for well under 1% of restaurants and
+    # attractions - so without this step a real itinerary prices only its
+    # hotel and reports every meal and entry fee as "no price data". That
+    # makes the budget total meaningless, the budget-feasibility check
+    # unable to fail, and "make it cheaper" a no-op, because the only
+    # priced line is the one the user cannot drop.
+    #
+    # Assuming the mid band is an estimate, not a measurement, and it is
+    # labelled "assumed" so callers can still tell it apart from a real
+    # price. It is deliberately NOT written back to travel_listing:
+    # price_level stays NULL because we genuinely do not know it, and
+    # inventing catalogue data to make a total look tidy is the failure
+    # mode the grounding checks exist to prevent.
+    row = cost_table.get((district_id, category, _ASSUMED_PRICE_LEVEL)) or         cost_table.get((None, category, _ASSUMED_PRICE_LEVEL))
+    if row is not None:
+        return CostEstimate(float(row["typical_cost"]), row.get("currency", "LKR"), "assumed")
 
     return CostEstimate(None, "LKR", "unknown")
 

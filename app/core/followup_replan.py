@@ -102,14 +102,30 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
     target_days = set(state.followup_target_days) if state.followup_target_days else {d["day"] for d in itinerary}
     price_ceiling = _CHEAPER_PRICE_CEILING if state.followup_cheaper else None
 
-    # Fetch the FULL pool (no price filter at the SQL level) so _rank()'s
-    # own soft-fallback below has something to fall back TO if the cheaper
-    # ceiling eliminates every candidate - pre-filtering here would defeat
-    # that fallback before it ever runs.
+    # The pool is ordered by rating_count DESC, so the top 40 hotels in a
+    # district are its best-known ones - which in Colombo are all
+    # price_level 3. Fetching only that pool made "make it cheaper" a
+    # guaranteed no-op: the cheaper ceiling eliminated all 40 candidates,
+    # _rank()'s soft-fallback then dropped the ceiling to avoid an empty
+    # pool, and the same expensive hotel came back with the same total.
+    #
+    # So when a ceiling is in play, ask the database for candidates that can
+    # actually satisfy it, and keep the unconstrained pool as the fallback
+    # rather than the only option. The soft-fallback below still protects
+    # against handing build_day_plan nothing.
+    async def _pool(category: str) -> dict:
+        full = await search_listings_by_district(district_id, category, limit=40)
+        if price_ceiling is None:
+            return full
+        cheap = await search_listings_by_district(
+            district_id, category, max_price_level=price_ceiling, limit=40,
+        )
+        return cheap if (cheap.get("items") or []) else full
+
     try:
-        hotels_obs = await search_listings_by_district(district_id, "hotel", limit=40)
-        restaurants_obs = await search_listings_by_district(district_id, "restaurant", limit=40)
-        attractions_obs = await search_listings_by_district(district_id, "attraction", limit=40)
+        hotels_obs = await _pool("hotel")
+        restaurants_obs = await _pool("restaurant")
+        attractions_obs = await _pool("attraction")
     except DataUnavailable as e:
         logger.warning(f"followup_replan: candidate fetch failed ({e}) - falling back to a full re-plan.")
         state.errors.append(f"targeted_replan_failed: {e}")
