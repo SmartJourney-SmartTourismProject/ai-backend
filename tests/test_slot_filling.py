@@ -247,12 +247,20 @@ async def test_origin_location_is_geocoded_when_start_location_missing(monkeypat
 
     result = await fill_slots(state)
 
-    assert result.start_location == {"lat": 7.9403, "lon": 81.0188, "source": "text"}
+    assert result.start_location == {
+        "lat": 7.9403,
+        "lon": 81.0188,
+        "source": "text",
+        # Carried so the map can label the departure pin with the place
+        # the traveler actually named, not just a bare coordinate.
+        "name": "Polonnaruwa",
+    }
 
 
 async def test_origin_location_does_not_override_existing_start_location(monkeypatch):
-    # GPS/IP resolution (done by the API layer before this ever runs) is
-    # more precise than geocoding a place name from text, so it always wins.
+    # A GPS fix is a precise answer to the same question the traveler is
+    # answering in words, so it still wins over geocoding a place name.
+    # An IP fix does not - see the test below.
     _patch_llm(monkeypatch, ExtractedSlots(destination="Kandy", origin_location="Polonnaruwa"))
     geocode_mock = AsyncMock(return_value={"lat": 7.9403, "lon": 81.0188})
     monkeypatch.setattr(slot_filling_module, "geocode_destination", geocode_mock)
@@ -265,6 +273,30 @@ async def test_origin_location_does_not_override_existing_start_location(monkeyp
 
     assert result.start_location == {"lat": 6.9271, "lon": 79.8612, "source": "gps"}
     geocode_mock.assert_not_called()
+
+
+async def test_stated_origin_overrides_an_ip_derived_start_location(monkeypatch):
+    """IP geolocation answers "where is this browser", which is not the
+    question. Someone sitting in Kandy can plan a trip departing from Galle,
+    and before this the IP guess had already filled start_location by the time
+    slot filling ran - so "Galle to Kandy" silently planned from Kandy."""
+    _patch_llm(monkeypatch, ExtractedSlots(destination="Kandy", origin_location="Galle"))
+    geocode_mock = AsyncMock(return_value={"lat": 6.0328, "lon": 80.2150})
+    monkeypatch.setattr(slot_filling_module, "geocode_destination", geocode_mock)
+    state = TripState(
+        user_input="I want to go to Galle to Kandy one day trip",
+        start_location={"lat": 7.2906, "lon": 80.6337, "source": "ip"},
+    )
+
+    result = await fill_slots(state)
+
+    assert result.start_location == {
+        "lat": 6.0328,
+        "lon": 80.2150,
+        "source": "text",
+        "name": "Galle",
+    }
+    geocode_mock.assert_awaited_once()
 
 
 async def test_origin_geocode_failure_leaves_start_location_unset(monkeypatch):
@@ -305,7 +337,14 @@ async def test_origin_location_works_on_followup_turn(monkeypatch):
     result = await fill_slots(state)
 
     assert result.destination == "Kandy"  # unaffected
-    assert result.start_location == {"lat": 7.9403, "lon": 81.0188, "source": "text"}
+    assert result.start_location == {
+        "lat": 7.9403,
+        "lon": 81.0188,
+        "source": "text",
+        # Carried so the map can label the departure pin with the place
+        # the traveler actually named, not just a bare coordinate.
+        "name": "Polonnaruwa",
+    }
 
 
 async def test_llm_failure_degrades_without_raising(monkeypatch):
