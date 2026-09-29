@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import app.core.context_resolver as context_resolver_module
 from app.core.context_resolver import resolve_trip_context
 from app.core.state import TripState
+from app.utils.clock import today_local
 
 _PLACE = {"name": "Kandy", "lat": 7.29, "lon": 80.63, "district_id": "d1", "confidence": "high"}
 
@@ -85,7 +86,7 @@ async def test_stale_carried_calendar_window_is_rechecked_not_reused(monkeypatch
     # get_free_days below) - reusing it as-is after duration grows could
     # silently book the traveller over their own busy days. It must be
     # re-derived from a fresh free_days lookup against the NEW duration.
-    today = datetime.now(timezone.utc).date()
+    today = today_local()
     long_start = (today + timedelta(days=5)).isoformat()
     long_end = (today + timedelta(days=8)).isoformat()   # 4 days free
     _patch_happy_path(monkeypatch, free_days=[
@@ -108,7 +109,7 @@ async def test_stale_carried_calendar_window_is_rechecked_not_reused(monkeypatch
 
 
 async def test_uses_the_soonest_long_enough_calendar_window(monkeypatch):
-    today = datetime.now(timezone.utc).date()
+    today = today_local()
     short_start = (today + timedelta(days=1)).isoformat()
     short_end = (today + timedelta(days=1)).isoformat()   # only 1 day free - too short for a 2-day trip
     long_start = (today + timedelta(days=5)).isoformat()
@@ -133,7 +134,7 @@ async def test_defaults_to_today_when_no_carried_dates_and_no_calendar_match(mon
 
     await resolve_trip_context(state)
 
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = today_local().isoformat()
     assert state.trip_context["date_window"]["source"] == "default"
     assert state.trip_context["date_window"]["start_date"] == today
     assert state.trip_context["context_confidence"] == "medium"   # capped by the default-window rule

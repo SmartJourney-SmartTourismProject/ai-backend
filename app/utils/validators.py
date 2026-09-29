@@ -2,6 +2,7 @@
 from datetime import date
 
 from app.core.state import TripState
+from app.utils.clock import today_local
 
 # Upper bounds - decision D6/Phase 5 (docs/master_plan/DETERMINISM_AND_VALIDATION.md
 # §5 "Validating the inputs too"). These reject an obvious typo (an extra
@@ -42,7 +43,9 @@ def validate_trip_state(state: TripState) -> TripState:
         errors.append(f"user_input must be at most {MAX_USER_INPUT_CHARS} characters")
     # Start date  is after end date
     if state.trip_dates:
-        today = date.today().isoformat()
+        # Same clock the trip window is built from; using the server's
+        # local date here is what made a just-built window look expired.
+        today = today_local().isoformat()
         for window in state.trip_dates:
             start = window.get("start_date")
             end = window.get("end_date")

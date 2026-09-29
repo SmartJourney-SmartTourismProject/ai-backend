@@ -28,6 +28,7 @@ import logging
 from datetime import date as date_cls, datetime, timedelta, timezone
 
 from app.core.state import TripState
+from app.utils.clock import today_local
 from app.tools.calendar_tool import get_free_days
 from app.tools.disaster_tool import get_disaster_info
 from app.tools.geo_tool import resolve_district, resolve_place
@@ -55,7 +56,9 @@ async def _resolve_date_window(state: TripState) -> dict:
     default starting from today - never an invented date (the actual bug
     class this replaces)."""
     duration = state.duration_days or 1
-    today = datetime.now(timezone.utc).date()
+    # Sri Lanka's civil date, not UTC's - see app/utils/clock.py for the
+    # follow-up failure the two-answers version caused.
+    today = today_local()
 
     if state.trip_dates:
         window = state.trip_dates[0]
