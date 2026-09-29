@@ -1,0 +1,1631 @@
+{
+  "80acb6b3-9d78-4a4a-a7a6-7ecd4554263d": {
+    "destination": "Kandy",
+    "duration_days": 2,
+    "budget": null,
+    "travelers": null,
+    "user_id": "7f0bedfd-a2fc-42fa-a476-b461654bb8bd",
+    "start_location": null,
+    "trip_dates": [],
+    "interests": [],
+    "travel_style": null,
+    "candidate_attractions": [
+      {
+        "id": "a5",
+        "name": "Temple of the Sacred Tooth Relic",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.8,
+        "interests": [
+          "culture",
+          "history",
+          "religion",
+          "unesco"
+        ],
+        "description": "UNESCO World Heritage Buddhist temple",
+        "lat": 7.2936,
+        "lon": 80.6413
+      },
+      {
+        "id": "a6",
+        "name": "Royal Botanical Gardens Peradeniya",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.7,
+        "interests": [
+          "nature",
+          "botany",
+          "walking"
+        ],
+        "description": "Extensive botanical gardens",
+        "lat": 7.2698,
+        "lon": 80.5972
+      },
+      {
+        "id": "a7",
+        "name": "Kandy Lake",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "Free",
+        "rating": 4.4,
+        "interests": [
+          "walking",
+          "views",
+          "relaxation"
+        ],
+        "description": "Scenic lake in city center",
+        "lat": 7.2906,
+        "lon": 80.6414
+      }
+    ],
+    "candidate_hotels": [
+      {
+        "id": "h4",
+        "name": "Kandy Lake View Hotel",
+        "category": "hotel",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.3,
+        "interests": [
+          "culture",
+          "views",
+          "history"
+        ],
+        "description": "Hotel overlooking Kandy Lake",
+        "lat": 7.2931,
+        "lon": 80.6392
+      },
+      {
+        "id": "h5",
+        "name": "Theva Residency",
+        "category": "hotel",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.6,
+        "interests": [
+          "luxury",
+          "culture",
+          "spa"
+        ],
+        "description": "Luxury hotel near Temple of Tooth",
+        "lat": 7.2945,
+        "lon": 80.635
+      }
+    ],
+    "candidate_restaurants": [
+      {
+        "id": "r4",
+        "name": "The Empire Cafe",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "colonial",
+          "tea",
+          "history"
+        ],
+        "description": "Historic cafe in colonial building",
+        "lat": 7.2939,
+        "lon": 80.6413
+      },
+      {
+        "id": "r5",
+        "name": "Slightly Chilled Lounge Bar",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "fine dining",
+          "cocktails",
+          "views"
+        ],
+        "description": "Upscale dining with lake views",
+        "lat": 7.291,
+        "lon": 80.641
+      }
+    ],
+    "candidate_events": [
+      {
+        "id": "e3",
+        "name": "Kandy Esala Perahera",
+        "destination": "Kandy",
+        "category": "festival",
+        "start_datetime": "2026-08-20T19:00:00",
+        "end_datetime": "2026-08-30T23:00:00",
+        "description": "Grand Buddhist festival with processions",
+        "lat": 7.2936,
+        "lon": 80.6413
+      },
+      {
+        "id": "e4",
+        "name": "Kandy Food Festival",
+        "destination": "Kandy",
+        "category": "food",
+        "start_datetime": "2026-09-10T10:00:00",
+        "end_datetime": "2026-09-12T22:00:00",
+        "description": "Food festival showcasing local cuisine",
+        "lat": 7.2906,
+        "lon": 80.6337
+      }
+    ],
+    "weather": {
+      "current": {
+        "temp": 22.48,
+        "condition": "Clouds",
+        "humidity": 97
+      },
+      "forecast": [
+        {
+          "date": "2026-09-20",
+          "temp_min": 22.11,
+          "temp_max": 22.56,
+          "condition": "Rain",
+          "rain_probability": 0.66
+        },
+        {
+          "date": "2026-09-21",
+          "temp_min": 20.98,
+          "temp_max": 28.61,
+          "condition": "Clouds",
+          "rain_probability": 1
+        }
+      ]
+    },
+    "disaster": {
+      "safe": false,
+      "active_events": [
+        {
+          "type": "gdacs_alert",
+          "severity": "green",
+          "title": "Green flood alert in Sri Lanka",
+          "source": "GDACS",
+          "distance_km": 8.8
+        }
+      ]
+    },
+    "attractions": [
+      {
+        "id": "a5",
+        "name": "Temple of the Sacred Tooth Relic",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.8,
+        "interests": [
+          "culture",
+          "history",
+          "religion",
+          "unesco"
+        ],
+        "description": "UNESCO World Heritage Buddhist temple",
+        "lat": 7.2936,
+        "lon": 80.6413,
+        "reason": "A must-visit cultural landmark in Kandy that offers an indoor historical experience appropriate for rainy weather."
+      },
+      {
+        "id": "a6",
+        "name": "Royal Botanical Gardens Peradeniya",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.7,
+        "interests": [
+          "nature",
+          "botany",
+          "walking"
+        ],
+        "description": "Extensive botanical gardens",
+        "lat": 7.2698,
+        "lon": 80.5972,
+        "reason": "Scheduled for Day 2 when cloud cover is expected rather than heavy rain, allowing for a pleasant nature walk."
+      }
+    ],
+    "hotels": [
+      {
+        "id": "h4",
+        "name": "Kandy Lake View Hotel",
+        "category": "hotel",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.3,
+        "interests": [
+          "culture",
+          "views",
+          "history"
+        ],
+        "description": "Hotel overlooking Kandy Lake",
+        "lat": 7.2931,
+        "lon": 80.6392,
+        "reason": "Fits the traveler's mid-budget request while offering great views and a convenient location."
+      }
+    ],
+    "restaurants": [
+      {
+        "id": "r4",
+        "name": "The Empire Cafe",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "colonial",
+          "tea",
+          "history"
+        ],
+        "description": "Historic cafe in colonial building",
+        "lat": 7.2939,
+        "lon": 80.6413,
+        "reason": "Matches the mid-budget requirement and is centrally located near cultural attractions."
+      },
+      {
+        "id": "r5",
+        "name": "Slightly Chilled Lounge Bar",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "fine dining",
+          "cocktails",
+          "views"
+        ],
+        "description": "Upscale dining with lake views",
+        "lat": 7.291,
+        "lon": 80.641,
+        "reason": "Provides a pleasant dining experience with scenic lake views close to the city center."
+      }
+    ],
+    "events": [],
+    "itinerary": [
+      {
+        "day": 1,
+        "date": "2026-09-20",
+        "items": [
+          {
+            "time": "09:00",
+            "type": "hotel",
+            "name": "Kandy Lake View Hotel",
+            "notes": "Check-in and settle in.",
+            "lat": 7.2931,
+            "lon": 80.6392
+          },
+          {
+            "time": "10:30",
+            "type": "attraction",
+            "name": "Temple of the Sacred Tooth Relic",
+            "notes": "Explore the UNESCO World Heritage Buddhist temple. Indoor activity chosen due to rain forecast.",
+            "lat": 7.2936,
+            "lon": 80.6413
+          },
+          {
+            "time": "13:00",
+            "type": "restaurant",
+            "name": "The Empire Cafe",
+            "notes": "Lunch at a historic colonial cafe nearby.",
+            "lat": 7.2939,
+            "lon": 80.6413
+          },
+          {
+            "time": "19:00",
+            "type": "restaurant",
+            "name": "Slightly Chilled Lounge Bar",
+            "notes": "Dinner with views overlooking Kandy Lake.",
+            "lat": 7.291,
+            "lon": 80.641
+          }
+        ]
+      },
+      {
+        "day": 2,
+        "date": "2026-09-21",
+        "items": [
+          {
+            "time": "09:30",
+            "type": "attraction",
+            "name": "Royal Botanical Gardens Peradeniya",
+            "notes": "Morning walk through the extensive botanical gardens during cloudy, dry conditions.",
+            "lat": 7.2698,
+            "lon": 80.5972
+          },
+          {
+            "time": "13:00",
+            "type": "restaurant",
+            "name": "The Empire Cafe",
+            "notes": "Casual lunch to wrap up the trip.",
+            "lat": 7.2939,
+            "lon": 80.6413
+          }
+        ]
+      }
+    ],
+    "recommendations": [
+      {
+        "category": "hotel",
+        "id": "h4",
+        "name": "Kandy Lake View Hotel",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.3,
+        "interests": [
+          "culture",
+          "views",
+          "history"
+        ],
+        "description": "Hotel overlooking Kandy Lake",
+        "lat": 7.2931,
+        "lon": 80.6392,
+        "reason": "Fits the traveler's mid-budget request while offering great views and a convenient location."
+      },
+      {
+        "category": "restaurant",
+        "id": "r4",
+        "name": "The Empire Cafe",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "colonial",
+          "tea",
+          "history"
+        ],
+        "description": "Historic cafe in colonial building",
+        "lat": 7.2939,
+        "lon": 80.6413,
+        "reason": "Matches the mid-budget requirement and is centrally located near cultural attractions."
+      },
+      {
+        "category": "restaurant",
+        "id": "r5",
+        "name": "Slightly Chilled Lounge Bar",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "fine dining",
+          "cocktails",
+          "views"
+        ],
+        "description": "Upscale dining with lake views",
+        "lat": 7.291,
+        "lon": 80.641,
+        "reason": "Provides a pleasant dining experience with scenic lake views close to the city center."
+      },
+      {
+        "category": "attraction",
+        "id": "a5",
+        "name": "Temple of the Sacred Tooth Relic",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.8,
+        "interests": [
+          "culture",
+          "history",
+          "religion",
+          "unesco"
+        ],
+        "description": "UNESCO World Heritage Buddhist temple",
+        "lat": 7.2936,
+        "lon": 80.6413,
+        "reason": "A must-visit cultural landmark in Kandy that offers an indoor historical experience appropriate for rainy weather."
+      },
+      {
+        "category": "attraction",
+        "id": "a6",
+        "name": "Royal Botanical Gardens Peradeniya",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.7,
+        "interests": [
+          "nature",
+          "botany",
+          "walking"
+        ],
+        "description": "Extensive botanical gardens",
+        "lat": 7.2698,
+        "lon": 80.5972,
+        "reason": "Scheduled for Day 2 when cloud cover is expected rather than heavy rain, allowing for a pleasant nature walk."
+      }
+    ],
+    "estimated_cost": 250.0
+  },
+  "91c30424-f98b-4813-8f5b-03de6afd750b": {
+    "destination": "Kandy",
+    "duration_days": 2,
+    "budget": null,
+    "travelers": null,
+    "user_id": "7f0bedfd-a2fc-42fa-a476-b461654bb8bd",
+    "start_location": null,
+    "trip_dates": [],
+    "interests": [],
+    "travel_style": null,
+    "candidate_attractions": [
+      {
+        "id": "a5",
+        "name": "Temple of the Sacred Tooth Relic",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.8,
+        "interests": [
+          "culture",
+          "history",
+          "religion",
+          "unesco"
+        ],
+        "description": "UNESCO World Heritage Buddhist temple",
+        "lat": 7.2936,
+        "lon": 80.6413
+      },
+      {
+        "id": "a6",
+        "name": "Royal Botanical Gardens Peradeniya",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.7,
+        "interests": [
+          "nature",
+          "botany",
+          "walking"
+        ],
+        "description": "Extensive botanical gardens",
+        "lat": 7.2698,
+        "lon": 80.5972
+      },
+      {
+        "id": "a7",
+        "name": "Kandy Lake",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "Free",
+        "rating": 4.4,
+        "interests": [
+          "walking",
+          "views",
+          "relaxation"
+        ],
+        "description": "Scenic lake in city center",
+        "lat": 7.2906,
+        "lon": 80.6414
+      }
+    ],
+    "candidate_hotels": [
+      {
+        "id": "h4",
+        "name": "Kandy Lake View Hotel",
+        "category": "hotel",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.3,
+        "interests": [
+          "culture",
+          "views",
+          "history"
+        ],
+        "description": "Hotel overlooking Kandy Lake",
+        "lat": 7.2931,
+        "lon": 80.6392
+      },
+      {
+        "id": "h5",
+        "name": "Theva Residency",
+        "category": "hotel",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.6,
+        "interests": [
+          "luxury",
+          "culture",
+          "spa"
+        ],
+        "description": "Luxury hotel near Temple of Tooth",
+        "lat": 7.2945,
+        "lon": 80.635
+      }
+    ],
+    "candidate_restaurants": [
+      {
+        "id": "r4",
+        "name": "The Empire Cafe",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "colonial",
+          "tea",
+          "history"
+        ],
+        "description": "Historic cafe in colonial building",
+        "lat": 7.2939,
+        "lon": 80.6413
+      },
+      {
+        "id": "r5",
+        "name": "Slightly Chilled Lounge Bar",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "fine dining",
+          "cocktails",
+          "views"
+        ],
+        "description": "Upscale dining with lake views",
+        "lat": 7.291,
+        "lon": 80.641
+      }
+    ],
+    "candidate_events": [
+      {
+        "id": "e3",
+        "name": "Kandy Esala Perahera",
+        "destination": "Kandy",
+        "category": "festival",
+        "start_datetime": "2026-08-20T19:00:00",
+        "end_datetime": "2026-08-30T23:00:00",
+        "description": "Grand Buddhist festival with processions",
+        "lat": 7.2936,
+        "lon": 80.6413
+      },
+      {
+        "id": "e4",
+        "name": "Kandy Food Festival",
+        "destination": "Kandy",
+        "category": "food",
+        "start_datetime": "2026-09-10T10:00:00",
+        "end_datetime": "2026-09-12T22:00:00",
+        "description": "Food festival showcasing local cuisine",
+        "lat": 7.2906,
+        "lon": 80.6337
+      }
+    ],
+    "weather": {
+      "current": {
+        "temp": 22.48,
+        "condition": "Clouds",
+        "humidity": 97
+      },
+      "forecast": [
+        {
+          "date": "2026-09-20",
+          "temp_min": 22.11,
+          "temp_max": 22.56,
+          "condition": "Rain",
+          "rain_probability": 0.66
+        },
+        {
+          "date": "2026-09-21",
+          "temp_min": 20.98,
+          "temp_max": 28.61,
+          "condition": "Clouds",
+          "rain_probability": 1
+        }
+      ]
+    },
+    "disaster": {
+      "safe": false,
+      "active_events": [
+        {
+          "type": "gdacs_alert",
+          "severity": "green",
+          "title": "Green flood alert in Sri Lanka",
+          "source": "GDACS",
+          "distance_km": 8.8
+        }
+      ]
+    },
+    "attractions": [
+      {
+        "id": "a5",
+        "name": "Temple of the Sacred Tooth Relic",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.8,
+        "interests": [
+          "culture",
+          "history",
+          "religion",
+          "unesco"
+        ],
+        "description": "UNESCO World Heritage Buddhist temple",
+        "lat": 7.2936,
+        "lon": 80.6413,
+        "reason": "A must-see UNESCO World Heritage site in Kandy that offers rich cultural and historical value indoors."
+      },
+      {
+        "id": "a7",
+        "name": "Kandy Lake",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "Free",
+        "rating": 4.4,
+        "interests": [
+          "walking",
+          "views",
+          "relaxation"
+        ],
+        "description": "Scenic lake in city center",
+        "lat": 7.2906,
+        "lon": 80.6414,
+        "reason": "Free and centrally located scenic spot for relaxation when weather permits, close to the hotel and restaurants."
+      }
+    ],
+    "hotels": [
+      {
+        "id": "h4",
+        "name": "Kandy Lake View Hotel",
+        "category": "hotel",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.3,
+        "interests": [
+          "culture",
+          "views",
+          "history"
+        ],
+        "description": "Hotel overlooking Kandy Lake",
+        "lat": 7.2931,
+        "lon": 80.6392,
+        "reason": "Fits the mid-budget request well with a moderate $$ price range and offers great views overlooking Kandy Lake."
+      }
+    ],
+    "restaurants": [
+      {
+        "id": "r4",
+        "name": "The Empire Cafe",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "colonial",
+          "tea",
+          "history"
+        ],
+        "description": "Historic cafe in colonial building",
+        "lat": 7.2939,
+        "lon": 80.6413,
+        "reason": "A charming mid-priced historic cafe located centrally, perfect for lunch near the cultural sights."
+      },
+      {
+        "id": "r5",
+        "name": "Slightly Chilled Lounge Bar",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "fine dining",
+          "cocktails",
+          "views"
+        ],
+        "description": "Upscale dining with lake views",
+        "lat": 7.291,
+        "lon": 80.641,
+        "reason": "Provides a nice upscale dining experience with stunning lake views to match the traveler's mid-to-high comfort preference."
+      }
+    ],
+    "events": [],
+    "itinerary": [
+      {
+        "day": 1,
+        "date": "2026-09-20",
+        "items": [
+          {
+            "time": "10:00",
+            "type": "hotel",
+            "name": "Kandy Lake View Hotel",
+            "notes": "Check-in and settle in.",
+            "lat": 7.2931,
+            "lon": 80.6392
+          },
+          {
+            "time": "12:30",
+            "type": "restaurant",
+            "name": "The Empire Cafe",
+            "notes": "Enjoy lunch in a historic colonial setting.",
+            "lat": 7.2939,
+            "lon": 80.6413
+          },
+          {
+            "time": "14:30",
+            "type": "attraction",
+            "name": "Temple of the Sacred Tooth Relic",
+            "notes": "Explore the prominent indoor UNESCO World Heritage Buddhist temple, well-suited as a cultural activity given the rainy forecast.",
+            "lat": 7.2936,
+            "lon": 80.6413
+          },
+          {
+            "time": "19:00",
+            "type": "restaurant",
+            "name": "Slightly Chilled Lounge Bar",
+            "notes": "Dinner and drinks with a view overlooking the lake.",
+            "lat": 7.291,
+            "lon": 80.641
+          }
+        ]
+      },
+      {
+        "day": 2,
+        "date": "2026-09-21",
+        "items": [
+          {
+            "time": "09:30",
+            "type": "attraction",
+            "name": "Kandy Lake",
+            "notes": "Short morning walk around the scenic city center lake (weather permitting during cloudy intervals).",
+            "lat": 7.2906,
+            "lon": 80.6414
+          },
+          {
+            "time": "12:00",
+            "type": "restaurant",
+            "name": "The Empire Cafe",
+            "notes": "A casual final lunch before departure.",
+            "lat": 7.2939,
+            "lon": 80.6413
+          }
+        ]
+      }
+    ],
+    "recommendations": [
+      {
+        "category": "hotel",
+        "id": "h4",
+        "name": "Kandy Lake View Hotel",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.3,
+        "interests": [
+          "culture",
+          "views",
+          "history"
+        ],
+        "description": "Hotel overlooking Kandy Lake",
+        "lat": 7.2931,
+        "lon": 80.6392,
+        "reason": "Fits the mid-budget request well with a moderate $$ price range and offers great views overlooking Kandy Lake."
+      },
+      {
+        "category": "restaurant",
+        "id": "r4",
+        "name": "The Empire Cafe",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "colonial",
+          "tea",
+          "history"
+        ],
+        "description": "Historic cafe in colonial building",
+        "lat": 7.2939,
+        "lon": 80.6413,
+        "reason": "A charming mid-priced historic cafe located centrally, perfect for lunch near the cultural sights."
+      },
+      {
+        "category": "restaurant",
+        "id": "r5",
+        "name": "Slightly Chilled Lounge Bar",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "fine dining",
+          "cocktails",
+          "views"
+        ],
+        "description": "Upscale dining with lake views",
+        "lat": 7.291,
+        "lon": 80.641,
+        "reason": "Provides a nice upscale dining experience with stunning lake views to match the traveler's mid-to-high comfort preference."
+      },
+      {
+        "category": "attraction",
+        "id": "a5",
+        "name": "Temple of the Sacred Tooth Relic",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.8,
+        "interests": [
+          "culture",
+          "history",
+          "religion",
+          "unesco"
+        ],
+        "description": "UNESCO World Heritage Buddhist temple",
+        "lat": 7.2936,
+        "lon": 80.6413,
+        "reason": "A must-see UNESCO World Heritage site in Kandy that offers rich cultural and historical value indoors."
+      },
+      {
+        "category": "attraction",
+        "id": "a7",
+        "name": "Kandy Lake",
+        "destination": "Kandy",
+        "price_range": "Free",
+        "rating": 4.4,
+        "interests": [
+          "walking",
+          "views",
+          "relaxation"
+        ],
+        "description": "Scenic lake in city center",
+        "lat": 7.2906,
+        "lon": 80.6414,
+        "reason": "Free and centrally located scenic spot for relaxation when weather permits, close to the hotel and restaurants."
+      }
+    ],
+    "estimated_cost": 0.0
+  },
+  "6909f9c0-0a59-4b85-aaac-b22ac3f1e65c": {
+    "destination": "Kandy",
+    "duration_days": 2,
+    "budget": null,
+    "travelers": null,
+    "user_id": "6dc947eb-6bdf-43d1-b0f7-b1ec1e54fc71",
+    "start_location": null,
+    "trip_dates": [],
+    "interests": [],
+    "travel_style": null,
+    "candidate_attractions": [
+      {
+        "id": "a5",
+        "name": "Temple of the Sacred Tooth Relic",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.8,
+        "interests": [
+          "culture",
+          "history",
+          "religion",
+          "unesco"
+        ],
+        "description": "UNESCO World Heritage Buddhist temple",
+        "lat": 7.2936,
+        "lon": 80.6413
+      },
+      {
+        "id": "a6",
+        "name": "Royal Botanical Gardens Peradeniya",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.7,
+        "interests": [
+          "nature",
+          "botany",
+          "walking"
+        ],
+        "description": "Extensive botanical gardens",
+        "lat": 7.2698,
+        "lon": 80.5972
+      },
+      {
+        "id": "a7",
+        "name": "Kandy Lake",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "Free",
+        "rating": 4.4,
+        "interests": [
+          "walking",
+          "views",
+          "relaxation"
+        ],
+        "description": "Scenic lake in city center",
+        "lat": 7.2906,
+        "lon": 80.6414
+      }
+    ],
+    "candidate_hotels": [
+      {
+        "id": "h4",
+        "name": "Kandy Lake View Hotel",
+        "category": "hotel",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.3,
+        "interests": [
+          "culture",
+          "views",
+          "history"
+        ],
+        "description": "Hotel overlooking Kandy Lake",
+        "lat": 7.2931,
+        "lon": 80.6392
+      },
+      {
+        "id": "h5",
+        "name": "Theva Residency",
+        "category": "hotel",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.6,
+        "interests": [
+          "luxury",
+          "culture",
+          "spa"
+        ],
+        "description": "Luxury hotel near Temple of Tooth",
+        "lat": 7.2945,
+        "lon": 80.635
+      }
+    ],
+    "candidate_restaurants": [
+      {
+        "id": "r4",
+        "name": "The Empire Cafe",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "colonial",
+          "tea",
+          "history"
+        ],
+        "description": "Historic cafe in colonial building",
+        "lat": 7.2939,
+        "lon": 80.6413
+      },
+      {
+        "id": "r5",
+        "name": "Slightly Chilled Lounge Bar",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "fine dining",
+          "cocktails",
+          "views"
+        ],
+        "description": "Upscale dining with lake views",
+        "lat": 7.291,
+        "lon": 80.641
+      }
+    ],
+    "candidate_events": [
+      {
+        "id": "e3",
+        "name": "Kandy Esala Perahera",
+        "destination": "Kandy",
+        "category": "festival",
+        "start_datetime": "2026-08-20T19:00:00",
+        "end_datetime": "2026-08-30T23:00:00",
+        "description": "Grand Buddhist festival with processions",
+        "lat": 7.2936,
+        "lon": 80.6413
+      },
+      {
+        "id": "e4",
+        "name": "Kandy Food Festival",
+        "destination": "Kandy",
+        "category": "food",
+        "start_datetime": "2026-09-10T10:00:00",
+        "end_datetime": "2026-09-12T22:00:00",
+        "description": "Food festival showcasing local cuisine",
+        "lat": 7.2906,
+        "lon": 80.6337
+      }
+    ],
+    "weather": {
+      "current": {
+        "temp": 24.62,
+        "condition": "Clouds",
+        "humidity": 77
+      },
+      "forecast": [
+        {
+          "date": "2026-09-25",
+          "temp_min": 21.86,
+          "temp_max": 26.4,
+          "condition": "Clouds",
+          "rain_probability": 0.69
+        },
+        {
+          "date": "2026-09-26",
+          "temp_min": 20.6,
+          "temp_max": 27.6,
+          "condition": "Clouds",
+          "rain_probability": 0.38
+        }
+      ]
+    },
+    "disaster": {
+      "safe": true,
+      "active_events": []
+    },
+    "attractions": [
+      {
+        "id": "a5",
+        "name": "Temple of the Sacred Tooth Relic",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.8,
+        "interests": [
+          "culture",
+          "history",
+          "religion",
+          "unesco"
+        ],
+        "description": "UNESCO World Heritage Buddhist temple",
+        "lat": 7.2936,
+        "lon": 80.6413,
+        "reason": "An essential cultural and historical landmark in Kandy that fits well into a mid-budget itinerary."
+      },
+      {
+        "id": "a6",
+        "name": "Royal Botanical Gardens Peradeniya",
+        "category": "attraction",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.7,
+        "interests": [
+          "nature",
+          "botany",
+          "walking"
+        ],
+        "description": "Extensive botanical gardens",
+        "lat": 7.2698,
+        "lon": 80.5972,
+        "reason": "Provides a wonderful nature walking experience with low admission costs."
+      }
+    ],
+    "hotels": [
+      {
+        "id": "h4",
+        "name": "Kandy Lake View Hotel",
+        "category": "hotel",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.3,
+        "interests": [
+          "culture",
+          "views",
+          "history"
+        ],
+        "description": "Hotel overlooking Kandy Lake",
+        "lat": 7.2931,
+        "lon": 80.6392,
+        "reason": "Offers a mid-range price point ($$) fitting the traveler's mid-budget request, with great views and a convenient location."
+      }
+    ],
+    "restaurants": [
+      {
+        "id": "r4",
+        "name": "The Empire Cafe",
+        "category": "restaurant",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "colonial",
+          "tea",
+          "history"
+        ],
+        "description": "Historic cafe in colonial building",
+        "lat": 7.2939,
+        "lon": 80.6413,
+        "reason": "Mid-range pricing aligns with the budget preference, and it offers a charming historic atmosphere near major central attractions."
+      }
+    ],
+    "events": [],
+    "itinerary": [
+      {
+        "day": 1,
+        "date": "2026-09-25",
+        "items": [
+          {
+            "time": "10:00",
+            "type": "attraction",
+            "name": "Temple of the Sacred Tooth Relic",
+            "notes": "Explore the UNESCO World Heritage Buddhist temple in the city center.",
+            "lat": 7.2936,
+            "lon": 80.6413
+          },
+          {
+            "time": "13:00",
+            "type": "restaurant",
+            "name": "The Empire Cafe",
+            "notes": "Enjoy lunch at this historic cafe located in a colonial building.",
+            "lat": 7.2939,
+            "lon": 80.6413
+          }
+        ]
+      },
+      {
+        "day": 2,
+        "date": "2026-09-26",
+        "items": [
+          {
+            "time": "09:30",
+            "type": "attraction",
+            "name": "Royal Botanical Gardens Peradeniya",
+            "notes": "Spend the morning exploring the extensive botanical gardens.",
+            "lat": 7.2698,
+            "lon": 80.5972
+          }
+        ]
+      }
+    ],
+    "recommendations": [
+      {
+        "category": "hotel",
+        "id": "h4",
+        "name": "Kandy Lake View Hotel",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.3,
+        "interests": [
+          "culture",
+          "views",
+          "history"
+        ],
+        "description": "Hotel overlooking Kandy Lake",
+        "lat": 7.2931,
+        "lon": 80.6392,
+        "reason": "Offers a mid-range price point ($$) fitting the traveler's mid-budget request, with great views and a convenient location."
+      },
+      {
+        "category": "restaurant",
+        "id": "r4",
+        "name": "The Empire Cafe",
+        "destination": "Kandy",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "colonial",
+          "tea",
+          "history"
+        ],
+        "description": "Historic cafe in colonial building",
+        "lat": 7.2939,
+        "lon": 80.6413,
+        "reason": "Mid-range pricing aligns with the budget preference, and it offers a charming historic atmosphere near major central attractions."
+      },
+      {
+        "category": "attraction",
+        "id": "a5",
+        "name": "Temple of the Sacred Tooth Relic",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.8,
+        "interests": [
+          "culture",
+          "history",
+          "religion",
+          "unesco"
+        ],
+        "description": "UNESCO World Heritage Buddhist temple",
+        "lat": 7.2936,
+        "lon": 80.6413,
+        "reason": "An essential cultural and historical landmark in Kandy that fits well into a mid-budget itinerary."
+      },
+      {
+        "category": "attraction",
+        "id": "a6",
+        "name": "Royal Botanical Gardens Peradeniya",
+        "destination": "Kandy",
+        "price_range": "$",
+        "rating": 4.7,
+        "interests": [
+          "nature",
+          "botany",
+          "walking"
+        ],
+        "description": "Extensive botanical gardens",
+        "lat": 7.2698,
+        "lon": 80.5972,
+        "reason": "Provides a wonderful nature walking experience with low admission costs."
+      }
+    ],
+    "estimated_cost": 150.0
+  },
+  "e3ff2052-ad2a-486e-a2a7-590fab0b9518": {
+    "destination": "Kurunagala",
+    "duration_days": null,
+    "budget": null,
+    "travelers": null,
+    "user_id": "5f57454d-13f5-413a-9abe-10fe2a06e104",
+    "start_location": null,
+    "trip_dates": [],
+    "interests": [],
+    "travel_style": null,
+    "candidate_attractions": [],
+    "candidate_hotels": [],
+    "candidate_restaurants": [],
+    "candidate_events": [],
+    "weather": {
+      "current": {
+        "temp": 28.41,
+        "condition": "Rain",
+        "humidity": 80
+      },
+      "forecast": [
+        {
+          "date": "2026-09-25",
+          "temp_min": 23.99,
+          "temp_max": 28.46,
+          "condition": "Clouds",
+          "rain_probability": 1
+        }
+      ]
+    },
+    "disaster": {
+      "safe": true,
+      "active_events": []
+    },
+    "attractions": [],
+    "hotels": [],
+    "restaurants": [],
+    "events": [],
+    "itinerary": [],
+    "recommendations": [],
+    "estimated_cost": null
+  },
+  "4e8ac8d7-edca-43fe-a6b0-eac2bcdf8c9e": {
+    "destination": "galle",
+    "duration_days": 1,
+    "budget": 1000.0,
+    "travelers": null,
+    "user_id": "5f57454d-13f5-413a-9abe-10fe2a06e104",
+    "start_location": {
+      "lat": 6.0328139,
+      "lon": 80.214955,
+      "source": "text"
+    },
+    "trip_dates": [],
+    "interests": [],
+    "travel_style": null,
+    "candidate_attractions": [
+      {
+        "id": "a11",
+        "name": "Galle Fort",
+        "category": "attraction",
+        "destination": "Galle",
+        "price_range": "Free",
+        "rating": 4.8,
+        "interests": [
+          "history",
+          "unesco",
+          "architecture",
+          "walking"
+        ],
+        "description": "UNESCO World Heritage Dutch fort",
+        "lat": 6.03,
+        "lon": 80.2167
+      },
+      {
+        "id": "a12",
+        "name": "Jungle Beach",
+        "category": "attraction",
+        "destination": "Galle",
+        "price_range": "Free",
+        "rating": 4.5,
+        "interests": [
+          "beach",
+          "swimming",
+          "nature",
+          "hidden gem"
+        ],
+        "description": "Secluded beach near Galle Fort",
+        "lat": 6.018,
+        "lon": 80.228
+      },
+      {
+        "id": "a13",
+        "name": "Sea Turtle Hatchery",
+        "category": "attraction",
+        "destination": "Galle",
+        "price_range": "$",
+        "rating": 4.4,
+        "interests": [
+          "wildlife",
+          "conservation",
+          "family"
+        ],
+        "description": "Turtle conservation center",
+        "lat": 6.085,
+        "lon": 80.26
+      }
+    ],
+    "candidate_hotels": [
+      {
+        "id": "h8",
+        "name": "Jetwing Lighthouse",
+        "category": "hotel",
+        "destination": "Galle",
+        "price_range": "$$$$",
+        "rating": 4.7,
+        "interests": [
+          "luxury",
+          "beach",
+          "history"
+        ],
+        "description": "Luxury resort designed by Geoffrey Bawa",
+        "lat": 6.0327,
+        "lon": 80.2168
+      },
+      {
+        "id": "h9",
+        "name": "Fort Bazaar",
+        "category": "hotel",
+        "destination": "Galle",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "boutique",
+          "history",
+          "culture"
+        ],
+        "description": "Boutique hotel in Galle Fort",
+        "lat": 6.03,
+        "lon": 80.217
+      }
+    ],
+    "candidate_restaurants": [
+      {
+        "id": "r8",
+        "name": "The Tuna & The Crab",
+        "category": "restaurant",
+        "destination": "Galle",
+        "price_range": "$$$",
+        "rating": 4.7,
+        "interests": [
+          "seafood",
+          "fine dining",
+          "beach"
+        ],
+        "description": "Seafood restaurant in Galle Fort",
+        "lat": 6.027,
+        "lon": 80.2168
+      },
+      {
+        "id": "r9",
+        "name": "Crepe-ology",
+        "category": "restaurant",
+        "destination": "Galle",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "crepes",
+          "breakfast",
+          "dessert"
+        ],
+        "description": "Popular crepe restaurant",
+        "lat": 6.0292,
+        "lon": 80.2172
+      }
+    ],
+    "candidate_events": [
+      {
+        "id": "e7",
+        "name": "Galle Literary Festival",
+        "destination": "Galle",
+        "category": "literary",
+        "start_datetime": "2026-01-15T09:00:00",
+        "end_datetime": "2026-01-19T20:00:00",
+        "description": "Annual literary festival in Galle Fort",
+        "lat": 6.03,
+        "lon": 80.2167
+      },
+      {
+        "id": "e8",
+        "name": "Galle Art Walk",
+        "destination": "Galle",
+        "category": "art",
+        "start_datetime": "2026-08-30T16:00:00",
+        "end_datetime": "2026-08-30T22:00:00",
+        "description": "Evening art walk through Galle Fort",
+        "lat": 6.0295,
+        "lon": 80.217
+      }
+    ],
+    "weather": {
+      "current": {
+        "temp": 29.46,
+        "condition": "Rain",
+        "humidity": 82
+      },
+      "forecast": [
+        {
+          "date": "2026-09-25",
+          "temp_min": 27.2,
+          "temp_max": 29.6,
+          "condition": "Rain",
+          "rain_probability": 1
+        }
+      ]
+    },
+    "disaster": {
+      "safe": true,
+      "active_events": []
+    },
+    "attractions": [
+      {
+        "id": "a13",
+        "name": "Sea Turtle Hatchery",
+        "category": "attraction",
+        "destination": "Galle",
+        "price_range": "$",
+        "rating": 4.4,
+        "interests": [
+          "wildlife",
+          "conservation",
+          "family"
+        ],
+        "description": "Turtle conservation center",
+        "lat": 6.085,
+        "lon": 80.26,
+        "reason": "Selected as an alternative activity given the rainy weather forecast for the travel date, offering an engaging indoor/sheltered conservation experience."
+      }
+    ],
+    "hotels": [
+      {
+        "id": "h9",
+        "name": "Fort Bazaar",
+        "category": "hotel",
+        "destination": "Galle",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "boutique",
+          "history",
+          "culture"
+        ],
+        "description": "Boutique hotel in Galle Fort",
+        "lat": 6.03,
+        "lon": 80.217,
+        "reason": "Selected as a central boutique hotel option within Galle Fort that fits comfortably within the overall budget."
+      }
+    ],
+    "restaurants": [
+      {
+        "id": "r9",
+        "name": "Crepe-ology",
+        "category": "restaurant",
+        "destination": "Galle",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "crepes",
+          "breakfast",
+          "dessert"
+        ],
+        "description": "Popular crepe restaurant",
+        "lat": 6.0292,
+        "lon": 80.2172,
+        "reason": "Provides a great indoor dining option in Galle Fort, perfect for escaping the forecasted rain."
+      }
+    ],
+    "events": [],
+    "itinerary": [
+      {
+        "day": 1,
+        "date": "2026-09-25",
+        "items": [
+          {
+            "time": "09:00",
+            "type": "hotel",
+            "name": "Fort Bazaar",
+            "notes": "Check-in and settle into your boutique hotel in Galle Fort.",
+            "lat": 6.03,
+            "lon": 80.217
+          },
+          {
+            "time": "11:30",
+            "type": "restaurant",
+            "name": "Crepe-ology",
+            "notes": "Enjoy a cozy indoor lunch while avoiding the forecasted rain.",
+            "lat": 6.0292,
+            "lon": 80.2172
+          },
+          {
+            "time": "14:30",
+            "type": "attraction",
+            "name": "Sea Turtle Hatchery",
+            "notes": "Visit the conservation center for a sheltered, wildlife-friendly afternoon activity.",
+            "lat": 6.085,
+            "lon": 80.26
+          }
+        ]
+      }
+    ],
+    "recommendations": [
+      {
+        "category": "hotel",
+        "id": "h9",
+        "name": "Fort Bazaar",
+        "destination": "Galle",
+        "price_range": "$$$",
+        "rating": 4.5,
+        "interests": [
+          "boutique",
+          "history",
+          "culture"
+        ],
+        "description": "Boutique hotel in Galle Fort",
+        "lat": 6.03,
+        "lon": 80.217,
+        "reason": "Selected as a central boutique hotel option within Galle Fort that fits comfortably within the overall budget."
+      },
+      {
+        "category": "restaurant",
+        "id": "r9",
+        "name": "Crepe-ology",
+        "destination": "Galle",
+        "price_range": "$$",
+        "rating": 4.4,
+        "interests": [
+          "crepes",
+          "breakfast",
+          "dessert"
+        ],
+        "description": "Popular crepe restaurant",
+        "lat": 6.0292,
+        "lon": 80.2172,
+        "reason": "Provides a great indoor dining option in Galle Fort, perfect for escaping the forecasted rain."
+      },
+      {
+        "category": "attraction",
+        "id": "a13",
+        "name": "Sea Turtle Hatchery",
+        "destination": "Galle",
+        "price_range": "$",
+        "rating": 4.4,
+        "interests": [
+          "wildlife",
+          "conservation",
+          "family"
+        ],
+        "description": "Turtle conservation center",
+        "lat": 6.085,
+        "lon": 80.26,
+        "reason": "Selected as an alternative activity given the rainy weather forecast for the travel date, offering an engaging indoor/sheltered conservation experience."
+      }
+    ],
+    "estimated_cost": 350.0
+  },
+  "6766ea69-536a-4c0b-9af3-b4a085fb3b57": {
+    "destination": "kurunagala",
+    "duration_days": null,
+    "budget": null,
+    "travelers": null,
+    "user_id": "4a5beb31-5b73-43a5-afc6-9be608412e1f",
+    "start_location": {
+      "lat": 6.0328139,
+      "lon": 80.214955,
+      "source": "text"
+    },
+    "trip_dates": [],
+    "interests": [],
+    "travel_style": null,
+    "candidate_attractions": [],
+    "candidate_hotels": [],
+    "candidate_restaurants": [],
+    "candidate_events": [],
+    "weather": null,
+    "disaster": {
+      "safe": true,
+      "active_events": []
+    },
+    "attractions": [],
+    "hotels": [],
+    "restaurants": [],
+    "events": [],
+    "itinerary": [],
+    "recommendations": [],
+    "estimated_cost": null
+  }
+}
