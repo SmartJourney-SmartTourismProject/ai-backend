@@ -1627,5 +1627,65 @@
     "itinerary": [],
     "recommendations": [],
     "estimated_cost": null
+  },
+  "f9ad7df8-62a6-451f-aa58-aa6128d74fde": {
+    "destination": "Kandy District",
+    "duration_days": 3,
+    "budget": null,
+    "travelers": null,
+    "user_id": "4a5beb31-5b73-43a5-afc6-9be608412e1f",
+    "start_location": {
+      "lat": 6.0328139,
+      "lon": 80.214955,
+      "source": "text"
+    },
+    "trip_dates": [],
+    "interests": [],
+    "travel_style": null,
+    "candidate_attractions": [],
+    "candidate_hotels": [],
+    "candidate_restaurants": [],
+    "candidate_events": [],
+    "weather": {
+      "current": {
+        "temp": 22.41,
+        "condition": "Rain",
+        "humidity": 92
+      },
+      "forecast": [
+        {
+          "date": "2026-09-29",
+          "temp_min": 21.11,
+          "temp_max": 22.24,
+          "condition": "Rain",
+          "rain_probability": 0.81
+        },
+        {
+          "date": "2026-09-30",
+          "temp_min": 19.88,
+          "temp_max": 26.21,
+          "condition": "Clouds",
+          "rain_probability": 0.36
+        },
+        {
+          "date": "2026-10-01",
+          "temp_min": 18.67,
+          "temp_max": 27.34,
+          "condition": "Rain",
+          "rain_probability": 1
+        }
+      ]
+    },
+    "disaster": {
+      "safe": true,
+      "active_events": []
+    },
+    "attractions": [],
+    "hotels": [],
+    "restaurants": [],
+    "events": [],
+    "itinerary": [],
+    "recommendations": [],
+    "estimated_cost": null
   }
 }
