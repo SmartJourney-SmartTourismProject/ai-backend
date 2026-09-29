@@ -1,0 +1,270 @@
+# tests/test_agents.py
+# The two remaining Phase 6 ReAct agents (app/agents/) - app/core/react.py's
+# own loop already has dedicated coverage (test_react.py), so these tests
+# mock run_react itself and check what each agent does with its result: how
+# it maps a structured output back onto TripState, and how it degrades on a
+# ReActError. No real LLM, no real tools, no real database.
+#
+# Context resolution (formerly the "orchestrator" agent) is now
+# deterministic (app/core/context_resolver.py, "C2" - itinerary-quality/
+# token-reduction pass) and has its own tests in test_context_resolver.py,
+# not here.
+
+from unittest.mock import AsyncMock
+
+import app.agents.recommendation_agent as recommendation_agent_module
+import app.agents.planner_agent as planner_agent_module
+from app.agents.planner_agent import PlannerAgent
+from app.agents.recommendation_agent import RecommendationAgent
+from app.core.react import ReActError, ReActResult, TraceStep, ToolCallTrace
+from app.core.state import TripState
+from app.models.schemas import (
+    DroppedItem, ItineraryDay, ItineraryItem, PlannerOutput, RecommendationOutput, Selection,
+)
+
+
+def _react_result(output, trace=None, stopped_by="answer") -> ReActResult:
+    return ReActResult(output=output, trace=trace or [], steps_used=len(trace or []),
+                        tools_used=[], stopped_by=stopped_by)
+
+
+# ─────────────────────────── recommendation agent ────────────────────────────
+
+_HOTEL_ID = "11111111-1111-1111-1111-111111111111"
+_ATTR_ID = "22222222-2222-2222-2222-222222222222"
+
+
+def _recommendation_trace() -> list[TraceStep]:
+    step = TraceStep(step=1, ai_content="")
+    step.tool_calls.append(ToolCallTrace(
+        tool="db_search_listings", args={"category": "hotel"},
+        observation={"items": [{"id": _HOTEL_ID, "name": "Hotel A", "lat": 7.29, "lon": 80.63, "tags": ["stay"]}]},
+    ))
+    step.tool_calls.append(ToolCallTrace(
+        tool="db_search_listings", args={"category": "attraction"},
+        observation={"items": [{"id": _ATTR_ID, "name": "Temple", "lat": 7.30, "lon": 80.64, "tags": ["culture"]}]},
+    ))
+    return [step]
+
+
+async def test_recommendation_agent_maps_output_onto_state(monkeypatch):
+    output = RecommendationOutput(
+        hotels=[Selection(listing_id=_HOTEL_ID, category="hotel", rank=1, score=0.8, reason="central")],
+        restaurants=[], attractions=[Selection(listing_id=_ATTR_ID, category="attraction", rank=1, score=0.7, reason="popular")],
+        events=[], dropped=[], coverage_notes=[],
+    )
+    monkeypatch.setattr(
+        recommendation_agent_module, "run_react",
+        AsyncMock(return_value=_react_result(output, trace=_recommendation_trace())),
+    )
+
+    state = TripState(user_input="x", destination="Kandy")
+    result = await RecommendationAgent().execute(state)
+
+    assert result.success is True
+    assert state.candidate_listing_ids == sorted([_HOTEL_ID, _ATTR_ID])
+    assert state.candidate_items[_HOTEL_ID]["name"] == "Hotel A"
+    assert state.hotels[0]["id"] == _HOTEL_ID
+    assert state.hotels[0]["name"] == "Hotel A"   # merged in from the observed candidate, not just id+reason
+    assert state.attractions[0]["id"] == _ATTR_ID
+    assert len(state.recommendations) == 2
+
+
+async def test_recommendation_agent_drops_a_hallucinated_selection(monkeypatch):
+    # L1 referential check at the recommendation agent boundary (2026-09-26,
+    # Tier 3): a listing_id the model invented - never returned by a real
+    # db_search_* observation, unlike _HOTEL_ID/_ATTR_ID from
+    # _recommendation_trace() - must never reach state.hotels/etc with no
+    # real data behind it (the old behavior: _flat() merged it with
+    # observed.get(id, {}) == {}, an item with no lat/lon at all).
+    _FAKE_ID = "99999999-9999-9999-9999-999999999999"
+    output = RecommendationOutput(
+        hotels=[
+            Selection(listing_id=_HOTEL_ID, category="hotel", rank=1, score=0.8, reason="central"),
+            Selection(listing_id=_FAKE_ID, category="hotel", rank=2, score=0.5, reason="invented"),
+        ],
+        restaurants=[], attractions=[], events=[], dropped=[], coverage_notes=[],
+    )
+    monkeypatch.setattr(
+        recommendation_agent_module, "run_react",
+        AsyncMock(return_value=_react_result(output, trace=_recommendation_trace())),
+    )
+
+    state = TripState(user_input="x", destination="Kandy")
+    result = await RecommendationAgent().execute(state)
+
+    assert result.success is True
+    assert [h["id"] for h in state.hotels] == [_HOTEL_ID]   # the real one kept, the invented one dropped
+    assert any("recommendation_hallucinated_drop" in e and _FAKE_ID in e for e in state.errors)
+
+
+async def test_recommendation_agent_records_dropped_items_but_still_succeeds(monkeypatch):
+    output = RecommendationOutput(
+        hotels=[], restaurants=[], attractions=[], events=[],
+        dropped=[DroppedItem(listing_id=_HOTEL_ID, reason_code="unsafe_area")],
+        coverage_notes=["no verified hotels in this district"],
+    )
+    monkeypatch.setattr(
+        recommendation_agent_module, "run_react",
+        AsyncMock(return_value=_react_result(output, trace=_recommendation_trace())),
+    )
+
+    state = TripState(user_input="x", destination="Kandy")
+    result = await RecommendationAgent().execute(state)
+
+    assert result.success is True
+    assert state.hotels == []
+    assert "1 dropped" in result.message
+
+
+async def test_recommendation_agent_degrades_on_react_error(monkeypatch):
+    monkeypatch.setattr(recommendation_agent_module, "run_react", AsyncMock(side_effect=ReActError("quota exhausted")))
+
+    state = TripState(user_input="x", destination="Kandy")
+    result = await RecommendationAgent().execute(state)
+
+    assert result.success is False
+    assert any("recommendation_failed" in e for e in state.errors)
+
+
+async def test_recommendation_agent_degrades_when_get_llm_itself_raises(monkeypatch):
+    # Same regression (Phase 8, scenario 11) - see the sibling agent's identical fix.
+    def _raise(*a, **kw):
+        raise RuntimeError("No LLM provider has a configured API key.")
+
+    monkeypatch.setattr(recommendation_agent_module, "get_llm", _raise)
+
+    state = TripState(user_input="x", destination="Kandy")
+    result = await RecommendationAgent().execute(state)   # must not raise
+
+    assert result.success is False
+    # Nothing to salvage - the loop never even started - but _observed_pools
+    # still returns the full category shape with empty lists, not {}.
+    assert all(items == [] for items in state.candidate_pools.values())
+
+
+async def test_recommendation_agent_salvages_candidate_pools_on_react_error(monkeypatch):
+    # Phase 8 fix: the loop can genuinely succeed at gathering real DB
+    # candidates even when the FINAL structured-output call fails - that
+    # data used to be thrown away entirely, leaving the fallback planner
+    # with nothing to build a real itinerary from (the dominant failure
+    # path per TODO.md). ReActError now carries the trace so it survives.
+    error = ReActError("structured output rejected", trace=_recommendation_trace())
+    monkeypatch.setattr(recommendation_agent_module, "run_react", AsyncMock(side_effect=error))
+
+    state = TripState(user_input="x", destination="Kandy")
+    result = await RecommendationAgent().execute(state)
+
+    assert result.success is False
+    assert state.candidate_pools["hotel"] == [
+        {"id": _HOTEL_ID, "name": "Hotel A", "lat": 7.29, "lon": 80.63, "tags": ["stay"]}
+    ]
+    assert state.candidate_pools["attraction"][0]["id"] == _ATTR_ID
+    assert state.candidate_listing_ids == sorted([_HOTEL_ID, _ATTR_ID])
+    # state.hotels/etc are NOT populated on failure - those need a real
+    # Selection (rank/score/reason), which a failed structured call never
+    # produced. _fallback_node reads candidate_pools, not these.
+    assert state.hotels == []
+
+
+async def test_recommendation_agent_populates_candidate_pools_on_success(monkeypatch):
+    output = RecommendationOutput(
+        hotels=[Selection(listing_id=_HOTEL_ID, category="hotel", rank=1, score=0.8, reason="central")],
+        restaurants=[], attractions=[], events=[], dropped=[], coverage_notes=[],
+    )
+    monkeypatch.setattr(
+        recommendation_agent_module, "run_react",
+        AsyncMock(return_value=_react_result(output, trace=_recommendation_trace())),
+    )
+
+    state = TripState(user_input="x", destination="Kandy")
+    await RecommendationAgent().execute(state)
+
+    assert state.candidate_pools["hotel"][0]["id"] == _HOTEL_ID
+    assert state.candidate_pools["attraction"][0]["id"] == _ATTR_ID
+    assert state.candidate_pools["restaurant"] == []
+
+
+# ─────────────────────────── planner agent ──────────────────────────────────
+
+def _planner_output() -> PlannerOutput:
+    item = ItineraryItem(
+        time="09:00", end_time="10:00", type="attraction", listing_id=_ATTR_ID,
+        name="Temple", lat=7.30, lon=80.64, est_cost=500.0, currency="LKR",
+    )
+    day = ItineraryDay(day=1, date="2026-10-01", items=[item], day_cost=500.0)
+    return PlannerOutput(itinerary=[day], estimated_cost=500.0, budget_notes=None)
+
+
+def _planner_trace() -> list[TraceStep]:
+    # A real build_day_plan observation backing day 1 - since 2026-09-26
+    # (planner_shared.py's unbacked-day rebuild, Tier 2), a day this agent
+    # accepted with NO such observation is force-rebuilt deterministically
+    # from state.hotels/restaurants/attractions, which this test never
+    # populates - so without a matching trace, day 1 would come back empty
+    # (0.0 cost) rather than the model's own output, testing the wrong
+    # thing. This trace is what makes day 1 "backed", matching
+    # _planner_output()'s own day 1 exactly (same day/date/cost/item).
+    return [TraceStep(step=1, tool_calls=[ToolCallTrace(
+        tool="build_day_plan", args={"day": 1, "date": "2026-10-01"},
+        observation={
+            "items": [{"time": "09:00", "end_time": "10:00", "type": "attraction", "listing_id": _ATTR_ID,
+                       "name": "Temple", "lat": 7.30, "lon": 80.64, "est_cost": 500.0,
+                       "currency": "LKR", "notes": ""}],
+            "day_cost": 500.0, "total_km": 1.0, "total_travel_min": 5, "dropped": [],
+        },
+    )])]
+
+
+async def test_planner_agent_populates_itinerary_on_success(monkeypatch):
+    monkeypatch.setattr(planner_agent_module, "_fetch_cost_table", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        planner_agent_module, "run_react",
+        AsyncMock(return_value=_react_result(_planner_output(), trace=_planner_trace())),
+    )
+
+    state = TripState(user_input="x", destination="Kandy", duration_days=1, budget=1000)
+    result = await PlannerAgent().execute(state)
+
+    assert result.success is True
+    assert state.plan_source == "llm"
+    assert len(state.itinerary) == 1
+    assert state.estimated_cost == 500.0
+
+
+async def test_planner_agent_degrades_on_react_error(monkeypatch):
+    monkeypatch.setattr(planner_agent_module, "_fetch_cost_table", AsyncMock(return_value={}))
+    monkeypatch.setattr(planner_agent_module, "run_react", AsyncMock(side_effect=ReActError("timed out")))
+
+    state = TripState(user_input="x", destination="Kandy", duration_days=1)
+    result = await PlannerAgent().execute(state)
+
+    assert result.success is False
+    assert state.planner_output is None
+
+
+async def test_planner_agent_degrades_when_get_llm_itself_raises(monkeypatch):
+    # Same regression (Phase 8, scenario 11) - see the sibling agent's identical fix.
+    def _raise(*a, **kw):
+        raise RuntimeError("No LLM provider has a configured API key.")
+
+    monkeypatch.setattr(planner_agent_module, "_fetch_cost_table", AsyncMock(return_value={}))
+    monkeypatch.setattr(planner_agent_module, "get_llm", _raise)
+
+    state = TripState(user_input="x", destination="Kandy", duration_days=1)
+    result = await PlannerAgent().execute(state)   # must not raise
+
+    assert result.success is False
+    assert state.planner_output is None
+    assert any("planner_failed" in e for e in state.errors)
+
+
+async def test_planner_agent_degrades_to_empty_cost_table_when_db_unreachable(monkeypatch):
+    async def _boom():
+        raise RuntimeError("db down")
+
+    # _fetch_cost_table itself never raises (it catches internally) - this
+    # verifies that promise, not the agent's own error handling.
+    monkeypatch.setattr(planner_agent_module, "get_pool", AsyncMock(side_effect=RuntimeError("db down")))
+    result = await planner_agent_module._fetch_cost_table()
+    assert result == {}

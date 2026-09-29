@@ -2,12 +2,18 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
 
 # Virtual Environment
 .venv/
 
 # Environment Variables
 .env
+.env*.bak
+*.bak
 
 # VS Code
 .vscode/
@@ -17,3 +23,10 @@ __pycache__/
 
 # Logs
 *.log
+
+# Accidental npm installs - this is a Python project, but a misdirected
+# `cd`+`npm install` has landed one here before.
+node_modules/
+
+calendar_tokens.json
+trip_sessions.json

@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# No database, Redis, or external API keys - tests/conftest.py fakes the
+# cache, weather/disaster feeds, calendar and session store, and
+# `-m "not external"` skips anything that still needs a live key/quota
+# (see pytest.ini). See Documentation/Testing/MASTER_TEST_PLAN.md.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Placeholders, not secrets: get_llm() and routing_tool gate on a key being
+    # present, but every non-external test mocks the actual network call.
+    env:
+      GEMINI_API_KEY: ci-placeholder
+      GROQ_API_KEY: ci-placeholder
+      ORS_API_KEY: ci-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -m "not external" -q

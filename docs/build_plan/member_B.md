@@ -1,0 +1,47 @@
+## Member B TODO: Google Calendar OAuth token storage
+
+`calendar_tool.py` (Member A) needs a place to persist each user's Google
+OAuth credentials (access token + refresh token) after they authorize.
+Not in the current ER diagram / db_tool.py contract.
+
+Needed: a new table, e.g. `google_oauth_tokens`, with at minimum:
+- user_id (FK to User)
+- access_token
+- refresh_token
+- token_expiry
+- Scope
+
+And two functions added to db_tool.py (or wherever DB access lives),
+matching this signature so calendar_tool.py doesn't need to change:
+
+    async def get_stored_credentials(user_id: str) -> dict | None: ...
+    async def save_credentials(user_id: str, creds: dict) -> None: ...
+
+Until this exists, Member A is mocking these in-memory / returning None,
+which makes get_free_days() fall through to [] (its designed no-calendar
+fallback) — so nothing is blocked, but calendar integration won't
+actually persist across sessions until this table exists.
+
+## Member A note: Gemini model name updated
+
+app/utils/slot_filling.py now uses "gemini-3.6-flash" instead of
+"gemini-2.5-flash" — the 2.5 model returned a 404 (no longer available
+to new API keys). If Recommendation/Planner agents reference
+gemini-2.5-flash or another deprecated model name anywhere, worth
+checking and updating those too.
+
+## Member A: orchestrator.py built with stub Recommendation/Planner nodes
+
+app/core/orchestrator.py wires the full graph: validate -> policy ->
+slot_fill -> location -> calendar -> context -> recommend -> plan -> respond.
+
+RecommendationAgent and PlannerAgent are currently stubs (fixed/trivial
+logic) wrapped as BaseAgent subclasses — this is deliberately the shape
+your real agents should match: `async def execute(self, state) ->
+AgentResult`. Swap the class bodies for real logic in Phase 4; the graph
+wiring (add_node/add_edge calls) shouldn't need to change.
+
+Also: app/api/trip.py (Phase 5, not built yet) needs to set client_gps
+and client_ip on TripState before calling orchestrator.ainvoke(state) —
+location_node currently reads these via getattr() with a None fallback
+since they don't exist on TripState yet.
