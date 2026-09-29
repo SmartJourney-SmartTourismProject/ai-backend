@@ -35,10 +35,23 @@ _WANTS_DIFFERENT_PLACES_PHRASES = [
 ]
 _CHEAPER_PHRASES = ["cheaper", "less expensive", "lower budget", "reduce cost", "reduce the cost"]
 
+# Questions ABOUT the plan that already exists, rather than requests to change
+# it. Before these were recognised, "show budget breakdown" fell through to a
+# shape_only re-plan: the user asked a question and got a different itinerary
+# back, with a different total, because the plan had been rebuilt from scratch.
+# An informational turn must never re-plan - it answers from state.itinerary,
+# which session carry-over already provides, with no LLM or tool call at all.
+_INFORMATIONAL_PHRASES = [
+    "budget breakdown", "cost breakdown", "break down the cost", "breakdown of the cost",
+    "show budget", "show the budget", "show cost", "show the cost",
+    "how much", "what does it cost", "what will it cost", "total cost",
+    "what is the cost", "what's the cost",
+]
+
 
 @dataclass
 class FollowupPlan:
-    scope: Literal["full", "shape_only"]
+    scope: Literal["full", "shape_only", "informational"]
     target_days: Optional[list[int]] = None   # None = every day in the itinerary
     cheaper: bool = False
 
@@ -64,4 +77,12 @@ def classify_followup(user_input: str, extracted: ExtractedSlots) -> FollowupPla
 
     days = sorted({int(m) for m in _DAY_PATTERN.findall(user_input)})
     cheaper = any(phrase in text for phrase in _CHEAPER_PHRASES)
+
+    # Checked after the two "this is a real change" gates above, so a message
+    # that both asks and instructs ("show the cost, and make it cheaper")
+    # still re-plans rather than only answering. Only a pure question is
+    # treated as read-only.
+    if not cheaper and not days and any(phrase in text for phrase in _INFORMATIONAL_PHRASES):
+        return FollowupPlan(scope="informational")
+
     return FollowupPlan(scope="shape_only", target_days=days or None, cheaper=cheaper)

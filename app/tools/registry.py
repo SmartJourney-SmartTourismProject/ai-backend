@@ -291,6 +291,14 @@ def build_planning_tools(
         real_checkout = need_hotel_checkout
         real_exclude_outdoor = exclude_outdoor
         real_items_target = items_target
+        # Nights stayed, not days visited. DayConstraints defaults this to 1,
+        # and omitting it here billed every LLM-planned trip for a single
+        # night however long it was - a 3-day trip quoted one night's hotel
+        # and came out at half its real cost, while the fallback and
+        # follow-up paths (which do pass it) quoted the right number. The
+        # three other DayConstraints call sites all use duration_days - 1;
+        # this one silently disagreed because the field is optional.
+        real_hotel_nights = 1
         if day_context is not None:
             real_day = min(max(day, 1), day_context.duration_days)
             real_date = (day_context.start_date + timedelta(days=real_day - 1)).isoformat()
@@ -311,12 +319,14 @@ def build_planning_tools(
             # should still be free to request; only an attempt to exceed the
             # traveler's stated pace is corrected.
             real_items_target = min(items_target, day_context.expected_items_per_day)
+            real_hotel_nights = max(day_context.duration_days - 1, 0)
 
         selections = DaySelections(hotels=hotels, restaurants=restaurants, attractions=attractions)
         constraints = DayConstraints(
             items_target=real_items_target, exclude_outdoor=real_exclude_outdoor,
             outdoor_tags=outdoor_tags, need_hotel_checkin=real_checkin,
             need_hotel_checkout=real_checkout, prefer_price_level_max=prefer_price_level_max,
+            hotel_nights=real_hotel_nights,
             cost_lookup=cost_lookup,
         )
         plan = _build_day_plan_pure(real_day, real_date, anchor, selections, constraints)

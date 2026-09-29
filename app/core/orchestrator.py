@@ -462,6 +462,42 @@ _SOFT_ERROR_PREFIXES = (
 )
 
 
+def _budget_breakdown_text(state: TripState) -> str:
+    """Per-day and per-category costs read straight off the itinerary already
+    on state. No re-planning, no LLM call: the numbers must match the plan the
+    user is looking at, and the only way to guarantee that is to read them
+    rather than recompute them from a fresh plan."""
+    lines = [f"Budget breakdown for {state.destination or 'your trip'}:"]
+    by_category: dict[str, float] = {}
+
+    for day in state.itinerary:
+        day_num = day.get("day", "?")
+        day_cost = float(day.get("day_cost") or 0.0)
+        lines.append(f"\nDay {day_num} - {day_cost:,.2f} LKR")
+        for item in day.get("items") or []:
+            cost = float(item.get("est_cost") or 0.0)
+            kind = item.get("type") or "item"
+            by_category[kind] = by_category.get(kind, 0.0) + cost
+            # Items with no price are shown as such rather than as 0.00,
+            # which would read as "free" when it means "unknown".
+            shown = f"{cost:,.2f} LKR" if cost else "no price data"
+            lines.append(f"  - {item.get('name', 'Unnamed')}: {shown}")
+
+    if by_category:
+        lines.append("\nBy category:")
+        for kind, total in sorted(by_category.items(), key=lambda kv: kv[1], reverse=True):
+            lines.append(f"  {kind}: {total:,.2f} LKR")
+
+    if state.estimated_cost is not None:
+        lines.append(f"\nTotal: {float(state.estimated_cost):,.2f} LKR")
+    if state.budget:
+        lines.append(f"Your budget: {float(state.budget):,.2f} LKR")
+    if state.budget_notes:
+        lines.append(f"\nNote: {state.budget_notes}")
+
+    return "\n".join(lines)
+
+
 async def _respond_node(state: TripState) -> TripState:
 
     if state.clarification_needed:
@@ -506,6 +542,8 @@ async def _respond_node(state: TripState) -> TripState:
                 f"I couldn't find enough options to plan a trip to {state.destination} right now. "
                 "Could you try adjusting the destination, dates, or budget?"
             )
+    elif state.followup_scope == "informational":
+        state.final_response = _budget_breakdown_text(state)
     else:
         state.final_response = (
             f"Here's your trip plan for {state.destination or 'your destination'}: "
@@ -533,6 +571,12 @@ def _route_after_policy(state: TripState) -> str:
 
 def _route_after_slot_fill(state: TripState) -> str:
     if state.clarification_needed:
+        return "respond"
+    # A question about the existing plan is answered from the plan itself.
+    # Routing it anywhere else rebuilds the itinerary, which is how "show
+    # budget breakdown" used to come back with different stops and a
+    # different total - and burned a full planning cycle to do it.
+    if state.is_followup and state.followup_scope == "informational" and state.itinerary:
         return "respond"
     if state.is_followup and state.followup_scope == "shape_only":
         return "targeted_replan"
