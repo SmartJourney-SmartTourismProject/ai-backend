@@ -51,7 +51,7 @@ class DataUnavailable(Exception):
 
 _SELECT_LISTINGS = """
     SELECT l.id, l.name, l.description, l.tags, l.price_level, l.price_per_night, l.currency,
-           l.latitude, l.longitude, l.rating, l.rating_count, l.photo_url, l.opening_hours,
+           l.latitude, l.longitude, l.rating, l.rating_count, l.popularity, l.photo_url, l.opening_hours,
            l.has_public_transit, l.nearest_transit_stop
     FROM travel_listing l
     JOIN category c ON c.id = l.category_id
@@ -112,6 +112,9 @@ def _row_to_listing_dict(row) -> dict:
         "lon": row["longitude"],
         "rating": float(row["rating"]) if row["rating"] is not None else None,
         "rating_count": row["rating_count"] or 0,
+        # Wikipedia pageviews - the only popularity signal most
+        # attractions have, since ratings exist almost only on hotels.
+        "popularity": row["popularity"],
         "photo_url": row["photo_url"],
         "opening_hours": row["opening_hours"],
         "has_public_transit": row["has_public_transit"] or False,
@@ -264,7 +267,7 @@ async def get_events(destination: str, start_date: str, end_date: str) -> List[d
 
 _SELECT_LISTINGS_FULL = """
     SELECT l.id, l.name, l.description, l.tags, l.price_level, l.price_per_night, l.currency,
-           l.latitude, l.longitude, l.rating, l.rating_count, l.photo_url, l.opening_hours,
+           l.latitude, l.longitude, l.rating, l.rating_count, l.popularity, l.photo_url, l.opening_hours,
            l.has_public_transit, l.nearest_transit_stop
     FROM travel_listing l
     JOIN category c ON c.id = l.category_id

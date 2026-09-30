@@ -57,6 +57,9 @@ _REAL_LISTING_ROW = {
     "id": "listing-1", "name": "Real DB Hotel", "description": "A real listing",
     "tags": ["stay", "culture"], "price_level": 2, "price_per_night": 12000.0, "currency": "LKR",
     "latitude": 7.2906, "longitude": 80.6337, "rating": 4.5, "rating_count": 120,
+    # Wikipedia pageviews (migration 0010) - the fixture mirrors a real row,
+    # so it carries every column the query selects.
+    "popularity": 5000,
     "photo_url": "https://example.com/photo.jpg", "opening_hours": {"raw": "24 hours"},
     "has_public_transit": True, "nearest_transit_stop": "Kandy Station",
 }

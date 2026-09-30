@@ -149,6 +149,57 @@ def rate(item: dict) -> float:
     return (r * n + PRIOR_MEAN * PRIOR_WEIGHT) / (n + PRIOR_WEIGHT)
 
 
+# A well-known place has roughly this many reviews; past it the signal
+# saturates, so a 2,000-review landmark doesn't bury a solid 200-review one.
+EVIDENCE_REVIEW_SATURATION = 200
+# Annual Wikipedia pageviews at which a place counts as nationally known.
+# Calibrated against real figures pulled 2026-09-30: Sigiriya 275k, Temple of
+# the Tooth 76k, Galle Fort 58k, Nine Arch Bridge 32k. 50k puts the major
+# landmarks at or near the ceiling while leaving room below for regional ones.
+EVIDENCE_PAGEVIEW_SATURATION = 50_000
+
+
+def evidence(item: dict) -> float:
+    """How much the catalogue actually knows about this place.
+
+    Almost every listing comes from OpenStreetMap, where a world-famous
+    landmark and a node somebody dropped on a map last week are the same
+    shape: a name and a coordinate. Nothing in the other sub-scores told
+    them apart - `pref` is a flat 0.5 when the traveler named no interests,
+    `rate` is a flat 0.45 for anything unrated, and `cost` is a flat 0.60
+    for an unknown price band. That left proximity deciding, which is how a
+    1-day Galle plan skipped Galle Fort Ramparts (4.7 stars, 210 reviews,
+    with a description) in favour of an unrated node that happened to be
+    nearer.
+
+    Review count is the strongest evidence a place is somewhere people
+    actually go; a description and opening hours mean a human curated the
+    entry. This is deliberately NOT a quality judgement - it measures how
+    well-attested a listing is, which is why a genuinely obscure but real
+    place still scores on the other factors and can still be chosen.
+    """
+    reviews = item.get("rating_count") or 0
+    # log scale: the jump from 0 to 20 reviews says far more than 500 to 1000.
+    review_signal = min(math.log10(1 + reviews) / math.log10(1 + EVIDENCE_REVIEW_SATURATION), 1.0)
+
+    # Wikipedia pageviews, from app/data/connectors/wikipedia_popularity.py.
+    # This is the strongest signal available for attractions, which is where it
+    # matters: ratings exist on hotels (Booking) and essentially nowhere else -
+    # 3 of 339 verified attractions carry one. Same log scale and the same
+    # reason for it.
+    views = item.get("popularity") or 0
+    view_signal = min(math.log10(1 + views) / math.log10(1 + EVIDENCE_PAGEVIEW_SATURATION), 1.0)
+
+    described = 1.0 if item.get("description") else 0.0
+    has_hours = 1.0 if item.get("opening_hours") else 0.0
+
+    # Reviews and pageviews answer the same question from different sources, so
+    # the better of the two carries the signal rather than averaging a present
+    # one against an absent one - almost nothing in this catalogue has both.
+    attested = max(review_signal, view_signal)
+    return clamp(0.5 * attested + 0.25 * described + 0.25 * has_hours)
+
+
 LEVEL_BASE = {1: 0.90, 2: 1.00, 3: 0.65, 4: 0.35}   # level 2 (medium) scores highest, not level 1
 
 
@@ -174,6 +225,7 @@ class Breakdown:
     prox: float
     rating: float
     cost: float
+    evidence: float = 0.0
 
 
 @dataclass
@@ -186,11 +238,21 @@ class Ranked:
 
 # ─────────────────────────── weights ───────────────────────────────────────
 
+# Each row sums to 1.0. `evidence` is weighted highest for attractions, where
+# "is this somewhere people actually visit" is the whole question and OSM gives
+# a landmark and an anonymous node the same shape.
+#
+# Hotels get NO evidence weight, deliberately. They are the one category with
+# real third-party data already - Booking.com prices and review scores on 664
+# of them - so `rate` and `cost` separate them on their own. Giving hotels an
+# evidence weight also broke a real requirement: a better-reviewed mid-priced
+# hotel started beating the cheap one under a tight budget, because evidence
+# tracks how well-known a place is, not whether the traveler can afford it.
 WEIGHTS: dict[str, dict[str, float]] = {
-    "attraction": {"pref": 0.45, "prox": 0.25, "rate": 0.20, "cost": 0.10},
-    "restaurant": {"pref": 0.30, "prox": 0.25, "rate": 0.20, "cost": 0.25},
-    "hotel":      {"pref": 0.25, "prox": 0.25, "rate": 0.20, "cost": 0.30},
-    "event":      {"pref": 0.50, "prox": 0.25, "rate": 0.10, "cost": 0.15},
+    "attraction": {"pref": 0.35, "prox": 0.20, "rate": 0.15, "cost": 0.10, "evidence": 0.20},
+    "restaurant": {"pref": 0.25, "prox": 0.20, "rate": 0.15, "cost": 0.25, "evidence": 0.15},
+    "hotel":      {"pref": 0.25, "prox": 0.25, "rate": 0.20, "cost": 0.30, "evidence": 0.00},
+    "event":      {"pref": 0.45, "prox": 0.20, "rate": 0.10, "cost": 0.15, "evidence": 0.10},
 }
 
 
@@ -259,10 +321,18 @@ def rank(items: list[dict], ctx: ScoringContext, category: str) -> list[Ranked]:
             prox=prox(i, ctx.anchor, ctx.matrix),
             rating=rate(i),
             cost=cost(i, ctx.budget_per_day.get(category), ctx.cost_estimates.get(i["id"])),
+            evidence=evidence(i),
         )
         # round(..., 6) before sorting - float noise in the 15th decimal
         # place otherwise reorders equal items between runs for no reason.
-        s = round(w["pref"] * b.pref + w["prox"] * b.prox + w["rate"] * b.rating + w["cost"] * b.cost, 6)
+        s = round(
+            w["pref"] * b.pref
+            + w["prox"] * b.prox
+            + w["rate"] * b.rating
+            + w["cost"] * b.cost
+            + w["evidence"] * b.evidence,
+            6,
+        )
         scored.append(Ranked(item=i, score=s, breakdown=b))
 
     # item.id as the final tie-break -> total ordering, deterministic even
