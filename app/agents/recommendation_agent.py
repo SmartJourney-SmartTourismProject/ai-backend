@@ -110,7 +110,7 @@ class RecommendationAgent(BaseAgent):
         })
         human = enforce_max_input_chars(spec, human)
         messages = [SystemMessage(content=spec.system), HumanMessage(content=human)]
-        tools, _item_store = build_data_tools()
+        tools, _item_store = build_data_tools(ctx.get("places"))
 
         try:
             result = await run_react(

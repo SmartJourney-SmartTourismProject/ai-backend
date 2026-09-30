@@ -48,7 +48,11 @@ RULES
 9.  If a category has fewer results than the maximum, return what exists and add a
     coverage_note explaining the gap. Never pad with a lower-quality item just to hit
     the count.
-10. {OUTPUT_ONLY_RULE}
+10. When TripContext.places lists more than one place, every db_search_listings call
+    already returns results from all of them - call it once per category as usual, with
+    the first place's district_id. Select at least one hotel from EACH place, and spread
+    restaurants and attractions across the places.
+11. {OUTPUT_ONLY_RULE}
 """
 
 RECOMMENDATION_SPEC = PromptSpec(
@@ -60,7 +64,9 @@ RECOMMENDATION_SPEC = PromptSpec(
     # investigation, 2026-09-25). run_react already executes a turn's tool
     # calls in parallel (asyncio.gather); this only changes what the model
     # asks for per turn.
-    version="1.2.0",   # B1 (AI_BACKEND_OPTIMIZATION_PLAN.md): score_candidates now takes listing_ids
+    # 1.3.0 (2026-10-01): RULE 10, multi-place trips - searches cover every
+    # place, and each place needs a hotel of its own.
+    version="1.3.0",
     system=RECOMMENDATION_SYSTEM_PROMPT,
     output_schema=RecommendationOutput,
 )

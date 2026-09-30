@@ -34,8 +34,9 @@ from app.core.output_validator import ValidationContext, day_scoped_repair_targe
 from app.core.fallback import PlanningContext, build_plan
 from app.core.followup_replan import rebuild_targeted_days
 from app.core.planner_shared import (
-    assemble_planner_days, build_planner_human_message, enforce_budget_notes, fill_missing_days,
-    resolve_day_context, resolve_items_per_day, resolve_planner_max_steps,
+    assemble_planner_days, build_leg_days, build_planner_human_message, enforce_budget_notes,
+    fill_missing_days, is_multi_place, resolve_day_context, resolve_items_per_day,
+    resolve_planner_max_steps, trip_places,
 )
 from app.core.react import ReActConfig, run_react
 from app.core.llm import get_llm
@@ -109,8 +110,36 @@ async def _recommend_node(state: TripState) -> TripState:
     return state
 
 
+async def _apply_leg_plan(state: TripState, plan_source: str) -> None:
+    """A multi-place trip's itinerary, built leg by leg
+    (planner_shared.build_leg_days), set on state the same way PlannerAgent
+    sets its own result."""
+    cost_table = await _fetch_cost_table()
+    days = build_leg_days(state, cost_table)
+    estimated_cost = round(sum(d.day_cost for d in days), 2)
+    output = PlannerOutput(
+        itinerary=days,
+        estimated_cost=estimated_cost,
+        currency="LKR",
+        budget_notes=enforce_budget_notes(None, estimated_cost, state.budget),
+    )
+    state.planner_output = output.model_dump()
+    state.itinerary = [d.model_dump() for d in days]
+    state.estimated_cost = output.estimated_cost
+    state.budget_notes = output.budget_notes
+    state.plan_source = plan_source
+
+
 async def _plan_node(state: TripState) -> TripState:
-    await PlannerAgent().execute(state)
+    if is_multi_place(state):
+        # "Galle and Matara": the recommender's LLM picks decide what is
+        # visited, and the days are assembled per place deterministically -
+        # an LLM planner here would need its own check that each day uses
+        # that place's hotel, and skipping it saves the largest prompt of
+        # the request (Groq's free tier caps tokens per minute).
+        await _apply_leg_plan(state, plan_source="llm")
+    else:
+        await PlannerAgent().execute(state)
     state.completed_steps.append("plan")
     return state
 
@@ -146,6 +175,7 @@ def _build_validation_context(state: TripState) -> ValidationContext:
         valid_dates=valid_dates,
         budget=state.budget,
         destination={"lat": ctx.get("lat", 0.0), "lon": ctx.get("lon", 0.0)},
+        destinations=[{"lat": p["lat"], "lon": p["lon"]} for p in trip_places(state)],
         candidate_listing_ids=set(state.candidate_listing_ids),
         outdoor_listing_ids=set(),   # see verify_node docstring - no per-item outdoor tag lookup wired here yet
         disaster_red_zones=[],       # disaster_tool never returns per-event coordinates, only distance_km - see AGENT_ARCHITECTURE.md §4's disaster tool row
@@ -398,6 +428,13 @@ async def _fallback_node(state: TripState) -> TripState:
         )
         state.errors.append(f"fallback_reason: {reason}")
 
+    if is_multi_place(state):
+        # Same leg-by-leg builder as _plan_node, now from the raw candidate
+        # pools too - build_plan_core below only knows one place.
+        await _apply_leg_plan(state, plan_source="fallback")
+        state.completed_steps.append("fallback")
+        return state
+
     ctx_dict = state.trip_context or {}
     date_window = ctx_dict.get("date_window") or {}
     try:
@@ -458,6 +495,9 @@ async def _fallback_node(state: TripState) -> TripState:
 _SOFT_ERROR_PREFIXES = (
     "location_unresolved", "profile_unavailable", "safety_note",
     "llm_plan_rejected", "planner_day_assembly",
+    # location_note (2026-10-01): more places named than the trip has days,
+    # so the plan covers the first ones - a real plan still follows.
+    "location_note",
     # fallback_reason (2026-09-26): set by _fallback_node whenever it was
     # entered for a reason OTHER than a validation rejection. Soft for the
     # same reason llm_plan_rejected is - it always accompanies a real,
@@ -776,6 +816,11 @@ async def _respond_node(state: TripState) -> TripState:
     has_real_content = any(day.get("items") for day in state.itinerary)
 
     if not has_real_content:
+        # Day entries with no stops aren't a plan to show: returned as-is
+        # they rendered in the chat as a card of empty days with a Save
+        # button (live-found 2026-10-01).
+        state.itinerary = []
+        state.estimated_cost = None
         if hard_errors:
             state.final_response = "Sorry, I ran into an issue: " + "; ".join(hard_errors)
         elif not state.destination:
@@ -804,7 +849,8 @@ async def _respond_node(state: TripState) -> TripState:
         # hallucinated-drop) is a developer diagnostic - still in `errors`
         # and the API response, just not in the chat bubble.
         traveller_notes = [
-            n for n in soft_notes if n.startswith(("location_unresolved", "profile_unavailable", "safety_note"))
+            n for n in soft_notes
+            if n.startswith(("location_unresolved", "location_note", "profile_unavailable", "safety_note"))
         ]
         if traveller_notes:
             state.final_response += "\n\nNote: " + "; ".join(traveller_notes)
@@ -865,6 +911,18 @@ def _route_after_targeted_replan(state: TripState) -> str:
     return "orchestrate" if state.followup_scope == "full" else "verify"
 
 
+def _route_after_orchestrate(state: TripState) -> str:
+    # No district means nothing to plan from. This edge used to be
+    # unconditional, so an unresolvable destination still ran the
+    # recommendation agent (a full LLM ReAct loop with no data), then the
+    # fallback, and came back as a card of empty days - and on Groq's free
+    # tier, that wasted loop is also what hit the per-minute token cap
+    # (live-found 2026-10-01, "galle and matara").
+    if state.clarification_needed or not state.trip_context:
+        return "respond"
+    return "recommend"
+
+
 def _route_after_recommend(state: TripState) -> str:
     return "plan" if state.recommendations else "fallback"
 
@@ -879,6 +937,11 @@ def _route_after_verify(state: TripState) -> str:
         # reaches this node at all (routed straight to "answer" from
         # slot_fill), and "plan" has nothing for _answer_node to do.
         return "answer" if state.intent == "both" else "respond"
+    # A multi-place plan was built by build_leg_days, not the LLM planner -
+    # an LLM repair of it has no planner conversation to repair, so a
+    # failure goes straight to the (leg-aware) fallback.
+    if is_multi_place(state):
+        return "fallback"
     # No-progress guard (2026-09-26): a repair that reproduces the EXACT
     # same failure set as the attempt right before it didn't fix anything -
     # most often a systematic failure (e.g. the plan_source literal finding
@@ -918,7 +981,7 @@ def build_orchestrator_graph():
     graph.add_conditional_edges("slot_fill", _route_after_slot_fill)
     graph.add_conditional_edges("targeted_replan", _route_after_targeted_replan)
 
-    graph.add_edge("orchestrate", "recommend")
+    graph.add_conditional_edges("orchestrate", _route_after_orchestrate)
     graph.add_conditional_edges("recommend", _route_after_recommend)
     graph.add_edge("plan", "verify")
     graph.add_conditional_edges("verify", _route_after_verify)

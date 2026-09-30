@@ -27,6 +27,13 @@ is the correct output when the user didn't say anything about that field.
 When listing interests or must_avoid items, use short singular lowercase
 tags (e.g. "beach", "hike", "culture") - not plurals or full phrases.
 
+If the traveler names SEVERAL places to visit, put all of them in
+destination, joined with " and " in the order named (e.g. "Galle and
+Matara"). Never pick just one of them. A region name goes in as written
+("down south", "hill country") - but when the traveler names a region AND
+specific places in it ("down south (Galle and Matara)"), use the specific
+places.
+
 If the traveler mentions where they are starting/departing from - their
 origin, separate from their destination - extract it as origin_location.
 Do not confuse origin with destination; if only a destination is

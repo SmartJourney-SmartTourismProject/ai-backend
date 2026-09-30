@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date as date_cls, timedelta
 from typing import Optional
@@ -381,3 +382,132 @@ def fill_missing_days(
     filled.sort(key=lambda d: d.day)
     logger.warning(f"fill_missing_days: filled {len(missing)} day(s) {missing} deterministically")
     return filled, warnings
+
+
+# ─────────────────────────── multi-place trips ───────────────────────────
+
+def trip_places(state: TripState) -> list[dict]:
+    """trip_context["places"] - every place of the trip, in order. A trip
+    resolved before multi-place support (carried in a session) has none;
+    it's a one-place trip."""
+    return [p for p in ((state.trip_context or {}).get("places") or []) if p.get("district_id")]
+
+
+def is_multi_place(state: TripState) -> bool:
+    return len(trip_places(state)) > 1
+
+
+def _in_district(items: list[dict], district_id: str) -> list[dict]:
+    return [i for i in items if str(i.get("district_id") or "") == str(district_id)]
+
+
+def _merge_unique(*lists: list[dict]) -> list[dict]:
+    seen: set = set()
+    out = []
+    for items in lists:
+        for item in items:
+            key = item.get("id")
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+    return out
+
+
+def build_leg_days(state: TripState, cost_table: CostReferenceTable) -> list[ItineraryDay]:
+    """Every day of a multi-place trip, built deterministically leg by leg
+    (app/core/legs.py decides which place each day is in).
+
+    Each place gets its own hotel - the recommender's best pick in that
+    place's district, else the best raw candidate there - and each day draws
+    its stops and meals from its own place, anchored on that place's hotel
+    (or centre, on a day trip with no hotel). Same builder and repeat
+    avoidance as fill_missing_days, so a day here obeys every rule a
+    single-place day does.
+
+    Used instead of the LLM planner for these trips: nothing would check
+    that a model put the right hotel on the right day, and the recommender's
+    LLM picks already decide WHAT is visited. Also used by the fallback, from
+    the raw candidate pools, when the recommender produced nothing."""
+    from app.core.legs import plan_legs
+
+    places = trip_places(state)
+    day_ctx = resolve_day_context(state)
+    duration_days = day_ctx.duration_days
+    items_per_day = day_ctx.expected_items_per_day
+    matrix = TravelMatrix()
+    pools = state.candidate_pools or {}
+
+    wants_restaurants = not category_excluded(state, "restaurant")
+    wants_hotels = not category_excluded(state, "hotel")
+    wants_attractions = not category_excluded(state, "attraction")
+
+    all_restaurants = _merge_unique(state.restaurants, pools.get("restaurant", [])) if wants_restaurants else []
+    all_attraction_pool = pools.get("attraction", []) if wants_attractions else []
+    picked_attractions = state.attractions if wants_attractions else []
+
+    used_restaurant_ids: set[str] = set()
+    used_attraction_ids: set[str] = set()
+    days: list[ItineraryDay] = []
+
+    for leg in plan_legs(len(places), duration_days):
+        place = places[leg.place_index]
+        district_id = place["district_id"]
+        centre = {"lat": place["lat"], "lon": place["lon"]}
+
+        hotels = (
+            _merge_unique(_in_district(state.hotels, district_id), _in_district(pools.get("hotel", []), district_id))
+            if wants_hotels and leg.nights > 0 else []
+        )
+        hotels = hotels[:1]
+        # A place's own restaurants/attractions first; the whole trip's only
+        # when that place has none, rather than serve an empty day.
+        restaurants = _in_district(all_restaurants, district_id) or all_restaurants
+        leg_picks = _in_district(picked_attractions, district_id)
+        leg_pool = _in_district(all_attraction_pool, district_id) or all_attraction_pool
+
+        day_anchor = (state.start_location if leg.day == 1 and state.start_location else None) \
+            or (hotels[0] if hotels else centre)
+        base = hotels[0] if hotels else centre
+
+        day_date = (day_ctx.start_date + timedelta(days=leg.day - 1)).isoformat()
+        fresh_attractions = attraction_candidates(leg_picks, leg_pool, used_attraction_ids, base)
+        fresh_restaurants = [r for r in restaurants if r.get("id") not in used_restaurant_ids] or restaurants
+        cost_lookup = {
+            **cost_lookup_for(hotels, "hotel", district_id, cost_table),
+            **cost_lookup_for(fresh_restaurants, "restaurant", district_id, cost_table),
+            **cost_lookup_for(fresh_attractions, "attraction", district_id, cost_table),
+        }
+        constraints = DayConstraints.for_day(
+            day_num=leg.day,
+            total_days=duration_days,
+            items_target=items_per_day,
+            has_hotels=bool(hotels),
+            wants_restaurants=wants_restaurants,
+            rain_probability=day_ctx.per_day_rain_probability.get(day_date, 0.0),
+            cost_lookup=cost_lookup,
+            checkin=leg.checkin,
+            checkout=leg.checkout,
+            nights=leg.nights,
+        )
+        selections = DaySelections(hotels=hotels, restaurants=fresh_restaurants, attractions=fresh_attractions)
+        plan = build_day_plan(leg.day, day_date, day_anchor, selections, constraints, matrix)
+
+        for it in plan.items:
+            if it.type == "restaurant" and it.listing_id:
+                used_restaurant_ids.add(it.listing_id)
+            elif it.type == "attraction" and it.listing_id:
+                used_attraction_ids.add(it.listing_id)
+
+        days.append(ItineraryDay(
+            day=plan.day, date=plan.date,
+            theme=re.sub(r"\s+District$", "", place["name"], flags=re.IGNORECASE),
+            items=[
+                {"time": i.time, "end_time": i.end_time, "type": i.type, "listing_id": i.listing_id,
+                 "name": i.name, "lat": i.lat, "lon": i.lon, "est_cost": i.est_cost,
+                 "currency": i.currency, "notes": i.notes}
+                for i in plan.items
+            ],
+            day_cost=plan.day_cost,
+        ))
+    return days

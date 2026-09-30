@@ -207,6 +207,9 @@ class DayConstraints:
         outdoor_tags: frozenset[str] = frozenset(),
         prefer_price_level_max: Optional[int] = None,
         cost_lookup: Optional[dict[str, float]] = None,
+        checkin: Optional[bool] = None,
+        checkout: Optional[bool] = None,
+        nights: Optional[int] = None,
     ) -> "DayConstraints":
         """The one place a day's constraints are derived.
 
@@ -230,6 +233,10 @@ class DayConstraints:
         Callers now pass facts - which day this is, how many there are, what
         the weather says - and the rules live here. A new planner path gets
         them by construction rather than by remembering.
+
+        `checkin`/`checkout`/`nights` override the whole-trip rules for a
+        multi-place trip, where each place is a leg with its own hotel (see
+        app/core/legs.py). Left as None, the rules above apply unchanged.
         """
         return cls(
             items_target=items_target,
@@ -238,11 +245,11 @@ class DayConstraints:
             # rain can force it on, but never off.
             exclude_outdoor=exclude_outdoor or rain_probability >= RAIN_THRESHOLD,
             outdoor_tags=outdoor_tags,
-            need_hotel_checkin=(day_num == 1 and has_hotels),
-            need_hotel_checkout=(day_num == total_days and has_hotels),
+            need_hotel_checkin=has_hotels and (checkin if checkin is not None else day_num == 1),
+            need_hotel_checkout=has_hotels and (checkout if checkout is not None else day_num == total_days),
             # Nights stayed, not days visited: a 3-day trip is 2 nights, and a
             # single-day trip stays nowhere.
-            hotel_nights=max(total_days - 1, 0),
+            hotel_nights=nights if nights is not None else max(total_days - 1, 0),
             include_lunch=wants_restaurants,
             include_dinner=wants_restaurants,
             prefer_price_level_max=prefer_price_level_max,

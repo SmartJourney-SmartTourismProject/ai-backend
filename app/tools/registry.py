@@ -81,18 +81,53 @@ class _ScoreCandidatesArgs(BaseModel):
     must_avoid: list[str] = Field(default_factory=list)
 
 
-def build_data_tools() -> tuple[list[StructuredTool], dict[str, dict]]:
+async def _search_places(places: list[dict], kwargs: dict) -> dict:
+    """db_search_listings for a multi-place trip: the same search in every
+    place's district, the limit shared between them, each item tagged with
+    the district it came from (the leg builder groups by it). A `near`
+    filter is re-centred on each place - the model only ever knows the
+    first place's coordinates, and a Galle-centred radius would hide every
+    Matara listing. One tool call for the model either way, so this costs
+    no extra LLM tokens."""
+    limit = int(kwargs.get("limit") or 15)
+    per_place = max(-(-limit // len(places)), 1)
+    items: list[dict] = []
+    total = 0
+    truncated = False
+    for place in places:
+        call = {**kwargs, "district_id": place["district_id"], "limit": per_place}
+        near = kwargs.get("near")
+        if near:
+            call["near"] = {**near, "lat": place["lat"], "lon": place["lon"]}
+        result = await search_listings_by_district(**call)
+        for item in result.get("items") or []:
+            items.append({**item, "district_id": place["district_id"]})
+        total += int(result.get("total") or 0)
+        truncated = truncated or bool(result.get("truncated"))
+    return {"items": items, "total": total, "truncated": truncated}
+
+
+def build_data_tools(places: Optional[list[dict]] = None) -> tuple[list[StructuredTool], dict[str, dict]]:
     """Per-request factory (mirrors build_planning_tools' own closure
     pattern below) - `item_store` accumulates every item any
     db_search_listings call in THIS request has returned, keyed by id, so
     score_candidates can take listing_ids. Returned alongside the tools so
     a caller (RecommendationAgent) can still read the full pool after the
-    ReAct loop finishes, same as it always could from the trace."""
+    ReAct loop finishes, same as it always could from the trace.
+
+    `places` is trip_context["places"]: with more than one, every search
+    covers all of them (see _search_places)."""
     item_store: dict[str, dict] = {}
+    multi_place = [p for p in (places or []) if p.get("district_id")]
+    if len(multi_place) < 2:
+        multi_place = []
 
     async def _db_search_listings(**kwargs) -> dict:
         try:
-            result = await search_listings_by_district(**kwargs)
+            if multi_place:
+                result = await _search_places(multi_place, kwargs)
+            else:
+                result = await search_listings_by_district(**kwargs)
         except Exception as e:
             return {"error": str(e), "items": [], "total": 0, "truncated": False}
         for item in result.get("items") or []:

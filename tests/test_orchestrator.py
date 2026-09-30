@@ -280,9 +280,9 @@ async def test_invalid_input_short_circuits_before_policy(monkeypatch):
 
 async def test_context_resolution_failure_is_advisory_not_blocking(monkeypatch):
     # resolve_trip_context failed to resolve anything (e.g. geocoding down) -
-    # recommend/plan still run (unconditional edge), and _respond_node
-    # surfaces the failure as a soft note rather than refusing to answer,
-    # as long as SOME itinerary still came out of the fallback/plan path.
+    # the failure is recorded, and the request is answered rather than
+    # crashing. (Since 2026-10-01 recommend/plan no longer run without a
+    # trip_context - see _route_after_orchestrate.)
     _patch_agents(monkeypatch, context_resolver=_fake_context_resolver(error="orchestrator_failed: geocoding unavailable"))
 
     state = TripState(user_input="x", destination="Nowhereville", duration_days=1)

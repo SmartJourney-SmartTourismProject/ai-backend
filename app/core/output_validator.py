@@ -77,6 +77,9 @@ class ValidationContext:
     day_end: Optional[str] = None                             # "HH:MM" curfew, e.g. itinerary.DAY_END
     max_single_hop_minutes: Optional[float] = None             # itinerary.DEFAULT_MAX_SINGLE_HOP_MINUTES
     expected_items_per_day: Optional[int] = None               # planner_shared.resolve_items_per_day(state)
+    # Every place of a multi-place trip ("Galle and Matara"); a stop only
+    # has to be near one of them. Empty = just `destination`.
+    destinations: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -190,8 +193,9 @@ def _geo_in_country(plan: PlannerOutput) -> Optional[str]:
 
 
 def _geo_near_dest(plan: PlannerOutput, ctx: ValidationContext) -> Optional[str]:
+    centres = ctx.destinations or [ctx.destination]
     for i in _all_items(plan):
-        dist = haversine_km(ctx.destination, {"lat": i.lat, "lon": i.lon})
+        dist = min(haversine_km(c, {"lat": i.lat, "lon": i.lon}) for c in centres)
         if dist > GEO_NEAR_DEST_KM:
             return f"'{i.name}' ({i.listing_id}) is {dist:.0f}km from the destination, over the {GEO_NEAR_DEST_KM:.0f}km limit"
     return None

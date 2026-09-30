@@ -58,6 +58,20 @@ _TOKEN_BUDGET: dict[Purpose, int] = {
     "answer": 600,
 }
 
+# Gemini "thinking" models count their internal reasoning against
+# max_output_tokens. For the small structured calls that left almost nothing
+# for the answer: gemini-3.6-flash spent 488 of slot filling's 512 tokens
+# reasoning about a long, detailed trip request, stopped with MAX_TOKENS, and
+# the JSON came back cut off - destination "G" (then geocoded to Poland),
+# "Galle and Mat", no duration, no budget (live-found 2026-10-01). These
+# purposes extract or phrase, they don't need to reason, so thinking is off;
+# recommend/plan keep the model's default.
+_GEMINI_THINKING_BUDGET: dict[str, int] = {
+    "slots": 0,
+    "respond": 0,
+    "answer": 0,
+}
+
 
 def log_token_usage(purpose: str, ai_message: Any) -> None:
     """Best-effort O5 token accounting (docs/AI_BACKEND_OPTIMIZATION_PLAN.md).
@@ -110,6 +124,9 @@ def _build(spec: str, purpose: Purpose, temperature: Optional[float]) -> BaseCha
     real_temperature = settings.llm_temperature if temperature is None else max(0.0, min(1.0, temperature))
 
     if provider == "gemini":
+        thinking = {}
+        if purpose in _GEMINI_THINKING_BUDGET:
+            thinking["thinking_budget"] = _GEMINI_THINKING_BUDGET[purpose]
         return ChatGoogleGenerativeAI(
             model=model,
             google_api_key=settings.gemini_api_key,
@@ -119,6 +136,7 @@ def _build(spec: str, purpose: Purpose, temperature: Optional[float]) -> BaseCha
             max_output_tokens=max_tokens,
             timeout=settings.llm_timeout_s,
             max_retries=0,  # retries are the chain's job, not one client's
+            **thinking,
         )
     if provider == "groq":
         return ChatGroq(

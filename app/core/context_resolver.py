@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import logging
 from datetime import date as date_cls, datetime, timedelta, timezone
+from typing import Optional
 
+from app.core.destinations import display_name, resolve_destinations
+from app.core.legs import plan_legs
 from app.core.state import TripState
 from app.utils.clock import today_local
 from app.tools.calendar_tool import get_free_days
@@ -139,6 +142,39 @@ def _build_safety_notes(disaster: dict) -> list[str]:
     return [f"Active red-level hazard(s) near your destination: {titles}."]
 
 
+async def _resolve_places(destination: Optional[str]) -> list[dict]:
+    """In-country places with a district, in the order named. Names that
+    resolve abroad are dropped here - slot_filling.py has already refused a
+    trip whose every place is outside Sri Lanka."""
+    places = await resolve_destinations(
+        destination, resolve_place=resolve_place, resolve_district=resolve_district,
+    )
+    return [
+        p for p in places
+        if p.get("confidence") != "out_of_country" and p.get("district_id")
+    ]
+
+
+async def _per_day_weather(places: list[dict], dates: list[str], duration: int) -> list[dict]:
+    """The forecast for each day at the place that day is spent in. One
+    place: its forecast as-is. Several: fetched per place (weather_tool
+    caches per location) and each date taken from its leg's place."""
+    if len(places) == 1:
+        result = await get_weather(places[0]["lat"], places[0]["lon"], dates)
+        return (result or {}).get("forecast") or []
+
+    by_place = []
+    for p in places:
+        result = await get_weather(p["lat"], p["lon"], dates)
+        by_place.append({w["date"]: w for w in ((result or {}).get("forecast") or [])})
+    out = []
+    for leg, date in zip(plan_legs(len(places), duration), dates):
+        forecast = by_place[leg.place_index].get(date)
+        if forecast is not None:
+            out.append(forecast)
+    return out
+
+
 async def resolve_trip_context(state: TripState) -> None:
     """Mutates `state` in place - same contract as
     app/core/followup_replan.py's rebuild_targeted_days(), the other
@@ -149,29 +185,42 @@ async def resolve_trip_context(state: TripState) -> None:
     trip_context left as-is for downstream nodes to degrade around (the
     orchestrate->recommend graph edge is unconditional either way)."""
     try:
-        place = await resolve_place(state.destination)
-        if place is None:
+        places = await _resolve_places(state.destination)
+        if not places:
             # One retry, same as the old prompt's RULE 2 - resolve_place's
             # own failures are usually a transient network/DB hiccup, not a
             # deterministic rejection (out-of-country already routed to
             # respond before this node is ever reached - see slot_filling.py).
-            place = await resolve_place(state.destination)
-        if place is None:
+            places = await _resolve_places(state.destination)
+        if not places:
             state.errors.append(f"orchestrator_failed: could not resolve destination '{state.destination}'")
+            # Asked, not guessed: without a district there is nothing to
+            # plan from, and running the LLM agents anyway only spent tokens
+            # on an empty plan (live-found 2026-10-01, "galle and matara"
+            # before multi-place support). The graph routes straight to
+            # respond on this - see _route_after_orchestrate.
+            state.clarification_needed = (
+                f"I couldn't find \"{state.destination}\" in Sri Lanka. Which town or district "
+                "should I plan around? You can name more than one, e.g. \"Galle and Matara\"."
+            )
             return
 
-        district_id = place.get("district_id")
-        if district_id is None:
-            district = await resolve_district(place["lat"], place["lon"])
-            district_id = district["district_id"] if district else None
-        if district_id is None:
-            state.errors.append(f"orchestrator_failed: could not resolve a district for '{state.destination}'")
-            return
+        # More places than days can't each get a day - keep the first ones,
+        # in the order the traveller named them, and say so.
+        duration = state.duration_days or 1
+        if len(places) > duration:
+            dropped = display_name(places[duration:])
+            places = places[:duration]
+            state.errors.append(
+                f"location_note: {duration} day(s) isn't enough for every place named, "
+                f"so this plan covers {display_name(places)} and leaves out {dropped}."
+            )
+        place = places[0]
+        district_id = place["district_id"]
 
         date_window = await _resolve_date_window(state)
 
-        weather_result = await get_weather(place["lat"], place["lon"], date_window["dates"])
-        per_day_weather = (weather_result or {}).get("forecast") or []
+        per_day_weather = await _per_day_weather(places, date_window["dates"], duration)
 
         disaster_raw = await get_disaster_info(place["lat"], place["lon"]) or DEFAULT_DISASTER
         disaster = _build_disaster_summary(disaster_raw)
@@ -184,10 +233,17 @@ async def resolve_trip_context(state: TripState) -> None:
         )
 
         state.trip_context = {
-            "destination_name": place["name"],
+            "destination_name": place["name"] if len(places) == 1 else display_name(places),
             "district_id": district_id,
             "lat": place["lat"],
             "lon": place["lon"],
+            # Every place of a multi-place trip, in order - the first is also
+            # the fields above, so single-place consumers are unaffected.
+            # app/core/legs.py decides which day is spent where.
+            "places": [
+                {"name": p["name"], "district_id": p["district_id"], "lat": p["lat"], "lon": p["lon"]}
+                for p in places
+            ],
             "start_location": state.start_location,
             "date_window": date_window,
             "per_day_weather": per_day_weather,

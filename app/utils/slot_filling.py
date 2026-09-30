@@ -9,9 +9,16 @@ from app.tools import db_tool
 from app.tools.db_tool import DataUnavailable
 from app.tools.geocode_tool import geocode_destination
 from app.tools.geo_tool import resolve_place
+from app.core.destinations import resolve_destinations
 
 _PROMPT = get_prompt("slot_filling")   # app/prompts/slot_filling_prompt.py - the single source
                                         # of both the prompt text and ExtractedSlots' schema
+
+
+async def _skip_district_lookup(lat: float, lon: float) -> dict:
+    """The country check only needs to know where a place is, not which
+    district - context_resolver does the real district lookup later."""
+    return {"district_id": None}
 
 
 async def fill_slots(state: TripState) -> TripState:
@@ -171,12 +178,20 @@ async def fill_slots(state: TripState) -> TripState:
     # filter on a country-restricted Nominatim search (see geo_tool.py's
     # module docstring) - it does not just check whether geocoding succeeded.
     if state.destination:
+        # Every place named, not the raw text as one name: "Galle and Matara"
+        # is two Sri Lankan places, and "down south" is a region - looked up
+        # whole, Nominatim put it in Washington State and this refused the
+        # trip as foreign (live-found 2026-10-01). Only a destination whose
+        # EVERY place is abroad is out of scope.
         try:
-            place = await resolve_place(state.destination)
+            places = await resolve_destinations(
+                state.destination, resolve_place=resolve_place, resolve_district=_skip_district_lookup,
+            )
         except Exception as e:
-            place = None
+            places = []
             state.errors.append(f"destination country check failed: {e}")
-        if place and place["confidence"] == "out_of_country":
+        place = places[0] if places else None
+        if place and all(p["confidence"] == "out_of_country" for p in places):
             state.clarification_needed = (
                 f"SmartJourney currently covers destinations within Sri Lanka only. "
                 f"{state.destination} is in {place['country']} — is there a Sri Lankan "

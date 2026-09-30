@@ -101,6 +101,15 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
         state.followup_scope = "full"
         return state
 
+    # A multi-place trip ("Galle and Matara") has a hotel and a district per
+    # leg; this rebuild only knows one of each, so it would put Galle's
+    # hotel and stops on the Matara days. The full pipeline rebuilds it leg
+    # by leg (planner_shared.build_leg_days).
+    if len([p for p in (ctx.get("places") or []) if p.get("district_id")]) > 1:
+        logger.info("followup_replan: multi-place trip - falling back to a full re-plan.")
+        state.followup_scope = "full"
+        return state
+
     target_days = set(state.followup_target_days) if state.followup_target_days else {d["day"] for d in itinerary}
     price_ceiling = _CHEAPER_PRICE_CEILING if state.followup_cheaper else None
 
