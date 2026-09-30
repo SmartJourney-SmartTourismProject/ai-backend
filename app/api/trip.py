@@ -17,6 +17,23 @@ from app.utils.session_store import load_session, save_session
 router = APIRouter(tags=["trip"])
 
 
+def _estimated_cost(result: dict) -> Optional[float]:
+    """The plan's total, falling back to the sum of its day costs.
+
+    `itinerary` is carried across turns (session_store) but `estimated_cost`
+    is not, so a turn that re-shows the existing plan without rebuilding it
+    (a weather or budget question) came back with its per-day costs and a
+    null total - and the chat's Save stored the trip with no cost, so Saved
+    Itineraries and the Budget tracker read 0.
+    """
+    if result.get("estimated_cost") is not None:
+        return result["estimated_cost"]
+    itinerary = result.get("itinerary") or []
+    if not any(day.get("items") for day in itinerary):
+        return None
+    return round(sum(float(day.get("day_cost") or 0) for day in itinerary), 2)
+
+
 def _trip_plan_cache_key(message: str, language: str, user_id: Optional[str]) -> str:
     """C3 (AI_BACKEND_OPTIMIZATION_PLAN.md): PROJECT_MASTER_PLAN.md §D6c has
     always claimed identical /trip-plan requests are cached; nothing ever
@@ -168,7 +185,7 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
         session_id=session_id,
         destination=result.get("destination"),
         itinerary=result.get("itinerary", []),
-        estimated_cost=result.get("estimated_cost"),
+        estimated_cost=_estimated_cost(result),
         currency="LKR",
         budget_notes=result.get("budget_notes"),
         plan_source=result.get("plan_source"),
