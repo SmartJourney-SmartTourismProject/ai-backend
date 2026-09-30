@@ -58,11 +58,13 @@ async def _fetch_cost_table() -> CostReferenceTable:
         return cost_table
     try:
         rows = await pool.fetch(
-            "SELECT district_id, category, price_level, unit, typical_cost, currency FROM cost_reference"
+            "SELECT district_id, category, price_level, unit, typical_cost, currency, "
+            "is_assumed_default FROM cost_reference"
         )
         cost_table = {
             (str(r["district_id"]) if r["district_id"] else None, r["category"], r["price_level"]):
-                {"unit": r["unit"], "typical_cost": r["typical_cost"], "currency": r["currency"]}
+                {"unit": r["unit"], "typical_cost": r["typical_cost"], "currency": r["currency"],
+                 "is_assumed_default": r["is_assumed_default"]}
             for r in rows
         }
     except Exception as e:
@@ -218,13 +220,12 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
         tail = [a for a in ranked_attractions if a["id"] not in used_attraction_ids and a["id"] not in cluster_ids]
         fresh_attractions = cluster + tail
         fresh_restaurants = [r for r in ranked_restaurants if r["id"] not in used_restaurant_ids]
-        constraints = DayConstraints(
+        constraints = DayConstraints.for_day(
+            day_num=day_num,
+            total_days=last_day_num,
             items_target=items_target,
-            outdoor_tags=frozenset(),
-            need_hotel_checkin=(day_num == 1 and bool(ranked_hotels)),
-            need_hotel_checkout=(day_num == last_day_num and bool(ranked_hotels)),
-            hotel_nights=max(last_day_num - 1, 0),
-            include_lunch=wants_restaurants, include_dinner=wants_restaurants,
+            has_hotels=bool(ranked_hotels),
+            wants_restaurants=wants_restaurants,
             prefer_price_level_max=price_ceiling,
             cost_lookup=all_cost_lookup,
         )

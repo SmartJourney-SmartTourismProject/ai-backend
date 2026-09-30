@@ -224,12 +224,15 @@ class TestAssumedCostsPerCategory:
     not exist.
     """
 
+    # Mirrors the real cost_reference table, is_assumed_default included
+    # (migration 0011): which band fills a gap is data now, not a rule in
+    # code, so the fixture has to say it the same way the database does.
     TABLE = {
-        (None, "attraction", 1): {"typical_cost": 0.0, "currency": "LKR"},
+        (None, "attraction", 1): {"typical_cost": 0.0, "currency": "LKR", "is_assumed_default": True},
         (None, "attraction", 2): {"typical_cost": 1500.0, "currency": "LKR"},
         (None, "attraction", 3): {"typical_cost": 5000.0, "currency": "LKR"},
-        (None, "restaurant", 2): {"typical_cost": 1800.0, "currency": "LKR"},
-        (None, "hotel", 2): {"typical_cost": 12000.0, "currency": "LKR"},
+        (None, "restaurant", 2): {"typical_cost": 1800.0, "currency": "LKR", "is_assumed_default": True},
+        (None, "hotel", 2): {"typical_cost": 12000.0, "currency": "LKR", "is_assumed_default": True},
     }
 
     def test_an_attraction_with_no_price_band_is_free(self):

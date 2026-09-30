@@ -325,13 +325,13 @@ def fill_missing_days(
             **cost_lookup_for(fresh_restaurants, "restaurant", district_id, cost_table),
             **cost_lookup_for(fresh_attractions, "attraction", district_id, cost_table),
         }
-        constraints = DayConstraints(
+        constraints = DayConstraints.for_day(
+            day_num=day_num,
+            total_days=duration_days,
             items_target=items_per_day,
-            exclude_outdoor=(rain_p >= WEATHER_RAIN_THRESHOLD),
-            need_hotel_checkin=(day_num == 1 and bool(hotels)),
-            need_hotel_checkout=(day_num == duration_days and bool(hotels)),
-            hotel_nights=max(duration_days - 1, 0),
-            include_lunch=wants_restaurants, include_dinner=wants_restaurants,
+            has_hotels=bool(hotels),
+            wants_restaurants=wants_restaurants,
+            rain_probability=rain_p,
             cost_lookup=cost_lookup,
         )
         selections = DaySelections(hotels=hotels, restaurants=fresh_restaurants, attractions=fresh_attractions)

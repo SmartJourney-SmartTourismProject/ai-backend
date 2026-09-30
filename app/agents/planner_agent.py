@@ -47,11 +47,13 @@ async def _fetch_cost_table() -> CostReferenceTable:
         return cost_table
     try:
         rows = await pool.fetch(
-            "SELECT district_id, category, price_level, unit, typical_cost, currency FROM cost_reference"
+            "SELECT district_id, category, price_level, unit, typical_cost, currency, "
+            "is_assumed_default FROM cost_reference"
         )
         cost_table = {
             (str(r["district_id"]) if r["district_id"] else None, r["category"], r["price_level"]):
-                {"unit": r["unit"], "typical_cost": r["typical_cost"], "currency": r["currency"]}
+                {"unit": r["unit"], "typical_cost": r["typical_cost"], "currency": r["currency"],
+                 "is_assumed_default": r["is_assumed_default"]}
             for r in rows
         }
     except Exception as e:

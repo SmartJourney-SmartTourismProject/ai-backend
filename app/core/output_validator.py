@@ -41,7 +41,10 @@ from app.models.schemas import PlannerOutput, ItineraryDay, ItineraryItem
 SRI_LANKA_LAT = (5.85, 9.95)
 SRI_LANKA_LON = (79.5, 82.0)
 GEO_NEAR_DEST_KM = 150.0
-WEATHER_RAIN_THRESHOLD = 0.6
+# Re-exported from the planner's definition rather than repeated: the plan
+# is built against this number and then checked against it, so two copies
+# drifting apart would make a plan fail a check it was built to pass.
+from app.core.itinerary import RAIN_THRESHOLD as WEATHER_RAIN_THRESHOLD
 DISASTER_RED_ZONE_KM = 50.0
 COST_TOLERANCE = 1.0   # LKR - float rounding noise, not a real discrepancy
 

@@ -70,7 +70,6 @@ class FallbackPlanResult:
     plan_source: str = "fallback"
 
 
-RAIN_THRESHOLD = 0.6   # matches DETERMINISM_AND_VALIDATION.md §5's weather_respect validator rule
 
 
 def build_plan_core(
@@ -176,17 +175,14 @@ def build_plan_core(
         fresh_attractions = cluster + tail
         fresh_restaurants = [r for r in ranked_restaurants if r["id"] not in used_restaurant_ids]
 
-        constraints = DayConstraints(
+        constraints = DayConstraints.for_day(
+            day_num=day_num,
+            total_days=ctx.duration_days,
             items_target=ctx.pace_items_per_day,
-            exclude_outdoor=(rain_p >= RAIN_THRESHOLD),
+            has_hotels=bool(ranked_hotels),
+            wants_restaurants=wants_restaurants,
+            rain_probability=rain_p,
             outdoor_tags=outdoor_tags,
-            need_hotel_checkin=(day_num == 1 and bool(ranked_hotels)),
-            need_hotel_checkout=(day_num == ctx.duration_days and bool(ranked_hotels)),
-            hotel_nights=max(ctx.duration_days - 1, 0),
-            # Meals were literals here, so "give viewpoints only" still came
-            # back with lunch and dinner in it.
-            include_lunch=wants_restaurants,
-            include_dinner=wants_restaurants,
             prefer_price_level_max=ctx.max_price_level,
             cost_lookup=all_cost_lookup,
         )
@@ -258,11 +254,13 @@ async def build_plan(
             pass   # fallback planner degrades further, not crashes - empty set just means no outdoor filtering
         try:
             rows = await pool.fetch(
-                "SELECT district_id, category, price_level, unit, typical_cost, currency FROM cost_reference"
+                "SELECT district_id, category, price_level, unit, typical_cost, currency, "
+            "is_assumed_default FROM cost_reference"
             )
             cost_table = {
                 (str(r["district_id"]) if r["district_id"] else None, r["category"], r["price_level"]):
-                    {"unit": r["unit"], "typical_cost": r["typical_cost"], "currency": r["currency"]}
+                    {"unit": r["unit"], "typical_cost": r["typical_cost"], "currency": r["currency"],
+                 "is_assumed_default": r["is_assumed_default"]}
                 for r in rows
             }
         except Exception:

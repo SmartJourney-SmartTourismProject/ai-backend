@@ -16,6 +16,12 @@ from typing import Optional
 
 from app.core.scoring import ROAD_FACTOR, TravelMatrix, haversine_km, haversine_minutes
 
+# One definition. fallback.py and output_validator.py each carried their
+# own copy at 0.6 - identical today, free to drift tomorrow, and the
+# planner and the validator disagreeing about what counts as rain would
+# make a plan fail a check it was built to pass.
+RAIN_THRESHOLD = 0.6
+
 # Dwell time per category - how long a traveller actually spends at a stop,
 # not counting travel to get there. Fallback default for an attraction with
 # no tag matching TAG_DWELL_MINUTES below, and the only value ever used for
@@ -139,6 +145,62 @@ class DayConstraints:
     # including dwell, so a day could run well past midnight and still
     # pass. items_target becomes an upper bound; this is the real one.
     day_end: str = DAY_END
+
+    @classmethod
+    def for_day(
+        cls,
+        *,
+        day_num: int,
+        total_days: int,
+        items_target: int,
+        has_hotels: bool,
+        wants_restaurants: bool = True,
+        rain_probability: float = 0.0,
+        exclude_outdoor: bool = False,
+        outdoor_tags: frozenset[str] = frozenset(),
+        prefer_price_level_max: Optional[int] = None,
+        cost_lookup: Optional[dict[str, float]] = None,
+    ) -> "DayConstraints":
+        """The one place a day's constraints are derived.
+
+        Four modules used to build this themselves - fallback.py,
+        planner_shared.fill_missing_days, followup_replan.py and the LLM's
+        build_day_plan tool - each repeating the same four rules:
+
+            need_hotel_checkin  = first day, if there are hotels
+            need_hotel_checkout = last day, if there are hotels
+            hotel_nights        = total_days - 1
+            exclude_outdoor     = this day's rain is over the threshold
+
+        Repeating them meant every new requirement had to be applied four
+        times, and twice it was not: `hotel_nights` was omitted in the LLM
+        path, so every LLM-planned trip billed exactly one night however long
+        it was; and `include_lunch`/`include_dinner` were passed as literal
+        True everywhere, so "give viewpoints only" came back with meals in it.
+        Both were found in production, not by tests, because each module's own
+        tests only ever exercised that module.
+
+        Callers now pass facts - which day this is, how many there are, what
+        the weather says - and the rules live here. A new planner path gets
+        them by construction rather than by remembering.
+        """
+        return cls(
+            items_target=items_target,
+            # An explicit exclusion from the caller (the model may judge a day
+            # unsuitable for outdoor stops on its own) is honoured, and real
+            # rain can force it on, but never off.
+            exclude_outdoor=exclude_outdoor or rain_probability >= RAIN_THRESHOLD,
+            outdoor_tags=outdoor_tags,
+            need_hotel_checkin=(day_num == 1 and has_hotels),
+            need_hotel_checkout=(day_num == total_days and has_hotels),
+            # Nights stayed, not days visited: a 3-day trip is 2 nights, and a
+            # single-day trip stays nowhere.
+            hotel_nights=max(total_days - 1, 0),
+            include_lunch=wants_restaurants,
+            include_dinner=wants_restaurants,
+            prefer_price_level_max=prefer_price_level_max,
+            cost_lookup=cost_lookup or {},
+        )
 
 
 @dataclass

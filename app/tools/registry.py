@@ -331,12 +331,17 @@ def build_planning_tools(
             real_hotel_nights = max(day_context.duration_days - 1, 0)
 
         selections = DaySelections(hotels=hotels, restaurants=restaurants, attractions=attractions)
-        constraints = DayConstraints(
-            items_target=real_items_target, exclude_outdoor=real_exclude_outdoor,
-            outdoor_tags=outdoor_tags, need_hotel_checkin=real_checkin,
-            need_hotel_checkout=real_checkout, prefer_price_level_max=prefer_price_level_max,
-            hotel_nights=real_hotel_nights,
-            include_lunch=wants_restaurants, include_dinner=wants_restaurants,
+        constraints = DayConstraints.for_day(
+            day_num=real_day,
+            total_days=day_context.duration_days if day_context else real_day,
+            items_target=real_items_target,
+            has_hotels=bool(hotels),
+            wants_restaurants=wants_restaurants,
+            # Already resolved against this day's real forecast above; passed
+            # as an explicit exclusion so the model's own judgement survives.
+            exclude_outdoor=real_exclude_outdoor,
+            outdoor_tags=outdoor_tags,
+            prefer_price_level_max=prefer_price_level_max,
             cost_lookup=cost_lookup,
         )
         plan = _build_day_plan_pure(real_day, real_date, anchor, selections, constraints)

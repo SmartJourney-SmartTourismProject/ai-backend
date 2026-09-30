@@ -33,13 +33,26 @@ CostReferenceTable = dict[tuple[Optional[str], str, int], dict]   # (district_id
 #                 than assuming a typical one.
 #   hotel      -> band 2: same reasoning; 665 of them carry a real Booking
 #                 price anyway and never reach this fallback.
-_ASSUMED_PRICE_LEVEL_BY_CATEGORY = {
-    "attraction": 1,
-    "restaurant": 2,
-    "hotel": 2,
-    "event": 2,
-}
-_DEFAULT_ASSUMED_PRICE_LEVEL = 2
+def _assumed_row(category: str, district_id: Optional[str],
+                 cost_table: CostReferenceTable) -> Optional[dict]:
+    """The band to assume for a category that declares none.
+
+    This used to be a dict in this module - {"attraction": 1, "restaurant": 2,
+    ...} - which put the rule in a different place from the prices it chooses
+    between, and made revising it a code change. It is now a flag on the
+    cost_reference row itself (migration 0011), so adding a category is a row
+    and changing an assumption is an UPDATE.
+
+    District-specific first, then national, matching the precedence the
+    explicit-band lookup above already uses.
+    """
+    for key, row in cost_table.items():
+        if key[1] == category and key[0] == district_id and row.get("is_assumed_default"):
+            return row
+    for key, row in cost_table.items():
+        if key[1] == category and key[0] is None and row.get("is_assumed_default"):
+            return row
+    return None
 
 # Base allocation, adjusted by travel_style. One dict, tunable in one place.
 DEFAULT_SPLIT = {"stay": 0.40, "food": 0.25, "activity": 0.20, "transport": 0.15}
@@ -127,8 +140,7 @@ def estimate_item_cost(item: dict, category: str, district_id: Optional[str],
     # price_level stays NULL because we genuinely do not know it, and
     # inventing catalogue data to make a total look tidy is the failure
     # mode the grounding checks exist to prevent.
-    assumed_level = _ASSUMED_PRICE_LEVEL_BY_CATEGORY.get(category, _DEFAULT_ASSUMED_PRICE_LEVEL)
-    row = cost_table.get((district_id, category, assumed_level)) or         cost_table.get((None, category, assumed_level))
+    row = _assumed_row(category, district_id, cost_table)
     if row is not None:
         return CostEstimate(float(row["typical_cost"]), row.get("currency", "LKR"), "assumed")
 
