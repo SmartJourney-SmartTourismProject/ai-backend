@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 _CARRY_OVER_FIELDS = [
     "destination", "trip_context", "start_location", "trip_dates",
     "duration_days", "budget", "travelers",
-    "interests", "travel_style", "must_avoid", "pace",
+    "interests", "travel_style", "must_avoid", "exclude_categories", "pace",
     # items_per_day (itinerary-quality/token-reduction pass, Part 3): a
     # follow-up "fewer destinations per day" decrements this and must
     # carry forward, or a second "even fewer" follow-up would just

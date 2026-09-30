@@ -54,6 +54,10 @@ class PlanningContext:
     per_day_rain_probability: dict[str, float] = field(default_factory=dict)   # "YYYY-MM-DD" -> 0..1
     disaster: Optional[dict] = None
     max_price_level: Optional[int] = None
+    # Kinds of stop the traveler ruled out entirely ("viewpoints only").
+    # Carried on the context rather than read from TripState, because
+    # build_plan_core is deliberately pure - it takes plain data only.
+    exclude_categories: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -83,6 +87,19 @@ def build_plan_core(
     is plain data. Called directly by the determinism test with a fixed
     fixture; called by build_plan() below with live-fetched data."""
     matrix = matrix or TravelMatrix()
+    excluded = ctx.exclude_categories or []
+    wants_restaurants = "restaurant" not in excluded
+    # Emptied rather than merely unscheduled: build_day_plan also draws on
+    # these pools to backfill a short day, which would put an excluded stop
+    # straight back in. Hotels matter here too - "viewpoints only" on a day
+    # trip extracts ["hotel", "restaurant"], and clearing only the restaurants
+    # left the check-in still in the plan.
+    if not wants_restaurants:
+        candidate_restaurants = []
+    if "hotel" in excluded:
+        candidate_hotels = []
+    if "attraction" in excluded:
+        candidate_attractions = []
 
     budget_per_day_by_category = budget_per_day(
         ctx.budget, ctx.duration_days, ctx.travel_style, ctx.travelers,
@@ -166,8 +183,10 @@ def build_plan_core(
             need_hotel_checkin=(day_num == 1 and bool(ranked_hotels)),
             need_hotel_checkout=(day_num == ctx.duration_days and bool(ranked_hotels)),
             hotel_nights=max(ctx.duration_days - 1, 0),
-            include_lunch=True,
-            include_dinner=True,
+            # Meals were literals here, so "give viewpoints only" still came
+            # back with lunch and dinner in it.
+            include_lunch=wants_restaurants,
+            include_dinner=wants_restaurants,
             prefer_price_level_max=ctx.max_price_level,
             cost_lookup=all_cost_lookup,
         )

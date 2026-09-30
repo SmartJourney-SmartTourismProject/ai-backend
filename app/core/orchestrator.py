@@ -149,6 +149,7 @@ def _build_validation_context(state: TripState) -> ValidationContext:
         day_end=DAY_END,
         max_single_hop_minutes=DEFAULT_MAX_SINGLE_HOP_MINUTES,
         expected_items_per_day=resolve_items_per_day(state),
+        excluded_categories=set(state.exclude_categories or []),
     )
 
 
@@ -409,6 +410,7 @@ async def _fallback_node(state: TripState) -> TripState:
         travel_style=state.travel_style,
         interests=state.interests,
         must_avoid=state.must_avoid,
+        exclude_categories=state.exclude_categories,
         pace_items_per_day=resolve_items_per_day(state),
         start_location=state.start_location,
         per_day_rain_probability=per_day_rain,

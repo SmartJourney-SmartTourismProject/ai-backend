@@ -45,6 +45,11 @@ class TripState(BaseModel):
     # app/core/scoring.py's hard_filter() via app/core/fallback.py's
     # PlanningContext (wired in app/core/orchestrator.py's `_fallback_node`).
     must_avoid: List[str] = Field(default_factory=list)
+    # Kinds of stop the traveler ruled out entirely ("viewpoints only",
+    # "no restaurants"). Distinct from must_avoid, which filters listings by
+    # subject tag and cannot express "omit this category from the plan" -
+    # meal slots were inserted unconditionally regardless of it.
+    exclude_categories: List[str] = Field(default_factory=list)
     pace: Optional[str] = None   # "relaxed" | "balanced" | "packed"
     # Explicit override for app/core/planner_shared.py's resolve_items_per_day() -
     # set by a follow-up like "fewer destinations per day" (app/core/followup.py),

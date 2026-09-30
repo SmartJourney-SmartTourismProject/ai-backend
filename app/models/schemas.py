@@ -71,6 +71,18 @@ class ExtractedSlots(BaseModel):
             "bad' -> ['hike']). Empty list if nothing was mentioned to avoid."
         ),
     )
+    exclude_categories: list[Literal["hotel", "restaurant", "attraction"]] = Field(
+        default_factory=list,
+        description=(
+            "Kinds of place the traveler does NOT want in the itinerary at all. "
+            "This is about the KIND of stop, not its subject matter - use "
+            "must_avoid for subject matter ('no hiking'). "
+            "Examples: 'give viewpoints only' -> ['hotel', 'restaurant']; "
+            "'no restaurants' -> ['restaurant']; 'just places to see, I'll sort "
+            "my own food' -> ['restaurant']. Empty list unless the traveler "
+            "clearly ruled a kind of stop out."
+        ),
+    )
     pace: Optional[Literal["relaxed", "balanced", "packed"]] = Field(
         None, description=(
             "How busy the traveler wants each day to be, only if they said "

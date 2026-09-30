@@ -161,8 +161,14 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
     # - restaurants/attractions mostly have no price_level at all (OSM
     # doesn't carry it), so EXCLUDING the category most able to actually
     # produce a cheaper day defeated the whole point for most real requests.
-    ranked_hotels = _rank(hotels_obs, "hotel", price_ceiling)
-    ranked_restaurants = _rank(restaurants_obs, "restaurant", price_ceiling)
+    ranked_hotels = (
+        [] if "hotel" in (state.exclude_categories or [])
+        else _rank(hotels_obs, "hotel", price_ceiling)
+    )
+    wants_restaurants = "restaurant" not in (state.exclude_categories or [])
+    # Same reason as the other two planner paths: an emptied pool is what
+    # actually keeps meals out, since build_day_plan backfills from it.
+    ranked_restaurants = _rank(restaurants_obs, "restaurant", price_ceiling) if wants_restaurants else []
     ranked_attractions = _rank(attractions_obs, "attraction", price_ceiling)
 
     all_cost_lookup = {
@@ -218,7 +224,7 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
             need_hotel_checkin=(day_num == 1 and bool(ranked_hotels)),
             need_hotel_checkout=(day_num == last_day_num and bool(ranked_hotels)),
             hotel_nights=max(last_day_num - 1, 0),
-            include_lunch=True, include_dinner=True,
+            include_lunch=wants_restaurants, include_dinner=wants_restaurants,
             prefer_price_level_max=price_ceiling,
             cost_lookup=all_cost_lookup,
         )

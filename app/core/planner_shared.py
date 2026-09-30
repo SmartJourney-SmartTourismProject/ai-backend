@@ -46,6 +46,27 @@ def resolve_planner_max_steps(duration_days: int | None) -> int:
 PACE_ITEMS: dict[str, int] = {"relaxed": 2, "balanced": 3, "packed": 5}
 
 
+def category_excluded(state: TripState, category: str) -> bool:
+    """Did the traveler rule this kind of stop out entirely?
+
+    "give viewpoints only" used to come back with two restaurants in it,
+    because every planner path passed include_lunch=True/include_dinner=True
+    as literals and nothing consulted the request. must_avoid could not
+    express this either - it filters listings by subject tag ("no hiking"),
+    not by kind of stop.
+
+    One helper, used by all three planner paths, so a new path cannot quietly
+    reintroduce the hardcoded meals.
+    """
+    return category in (state.exclude_categories or [])
+
+
+def meal_slots(state: TripState) -> tuple[bool, bool]:
+    """(include_lunch, include_dinner) for this trip."""
+    wants_restaurants = not category_excluded(state, "restaurant")
+    return wants_restaurants, wants_restaurants
+
+
 def resolve_items_per_day(state: TripState) -> int:
     """The one place that turns a traveler's pace/itinerary-density request
     into a concrete daily item count. Currently just PACE_ITEMS keyed by
@@ -73,6 +94,10 @@ class DayContext:
     duration_days: int
     per_day_rain_probability: dict[str, float] = field(default_factory=dict)
     expected_items_per_day: int = 3
+    # Kinds of stop the traveler ruled out. Server-known ground truth, exactly
+    # like the fields above: the model does not get to decide whether to honour
+    # "viewpoints only", any more than it decides what day 2's date is.
+    exclude_categories: list[str] = field(default_factory=list)
 
 
 def resolve_day_context(state: TripState) -> DayContext:
@@ -93,6 +118,7 @@ def resolve_day_context(state: TripState) -> DayContext:
         duration_days=state.duration_days or 1,
         per_day_rain_probability=per_day_rain,
         expected_items_per_day=resolve_items_per_day(state),
+        exclude_categories=state.exclude_categories or [],
     )
 
 # O2 (AI_BACKEND_OPTIMIZATION_PLAN.md): exactly the fields the planner
@@ -266,6 +292,15 @@ def fill_missing_days(
     matrix = TravelMatrix()
 
     hotels, restaurants, attractions = state.hotels, state.restaurants, state.attractions
+    wants_restaurants = not category_excluded(state, "restaurant")
+    # Cleared, not just unscheduled: build_day_plan draws on these pools to
+    # backfill a short day and would put an excluded stop straight back in.
+    if not wants_restaurants:
+        restaurants = []
+    if category_excluded(state, "hotel"):
+        hotels = []
+    if category_excluded(state, "attraction"):
+        attractions = []
     anchor = state.start_location or (hotels[0] if hotels else {"lat": 0.0, "lon": 0.0})
     hotel_anchor = hotels[0] if hotels else anchor
 
@@ -296,7 +331,7 @@ def fill_missing_days(
             need_hotel_checkin=(day_num == 1 and bool(hotels)),
             need_hotel_checkout=(day_num == duration_days and bool(hotels)),
             hotel_nights=max(duration_days - 1, 0),
-            include_lunch=True, include_dinner=True,
+            include_lunch=wants_restaurants, include_dinner=wants_restaurants,
             cost_lookup=cost_lookup,
         )
         selections = DaySelections(hotels=hotels, restaurants=fresh_restaurants, attractions=fresh_attractions)

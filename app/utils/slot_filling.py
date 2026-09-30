@@ -64,6 +64,8 @@ async def fill_slots(state: TripState) -> TripState:
                 state.interests = result.interests
             if result.must_avoid:
                 state.must_avoid = result.must_avoid
+            if result.exclude_categories:
+                state.exclude_categories = result.exclude_categories
             if result.pace:
                 state.pace = result.pace
             # Part 3: an absolute count always wins outright; a comparative
@@ -93,6 +95,8 @@ async def fill_slots(state: TripState) -> TripState:
                 state.interests = result.interests
             if not state.must_avoid and result.must_avoid:
                 state.must_avoid = result.must_avoid
+            if not state.exclude_categories and result.exclude_categories:
+                state.exclude_categories = result.exclude_categories
             if state.pace is None and result.pace:
                 state.pace = result.pace
             # No delta handling on a first turn - "fewer" has nothing to be
@@ -106,17 +110,21 @@ async def fill_slots(state: TripState) -> TripState:
         # it always takes priority. This applies on both first turns and
         # follow-ups: "I'm starting from Polonnaruwa" is exactly as useful
         # said on message 2 as on message 1, whenever GPS/IP failed.
-        # An origin the traveler actually typed beats an IP lookup. IP
-        # geolocation answers "where is this browser", which is not the
-        # question: someone sitting in Kandy can plan a trip that departs from
-        # Galle, and "Galle to Kandy" then silently planned from Kandy because
-        # the IP guess had already filled start_location before this ran.
-        # GPS still wins - it is a precise fix on the same intent, and a
-        # traveler who granted location access is telling us where they are.
-        stated_origin_may_override = (
-            state.start_location is None or state.start_location.get("source") == "ip"
-        )
-        if stated_origin_may_override and result.origin_location:
+        # An origin the traveler actually typed wins over ANY inferred one,
+        # GPS included.
+        #
+        # GPS and IP both answer "where is this device right now", which is a
+        # different question from "where does this trip start". Someone sitting
+        # in Colombo can plan a trip departing from Galle, and they usually
+        # are - trips get planned at home, days ahead. An earlier version let
+        # GPS win on the reasoning that a precise fix beats a geocoded name;
+        # that is true about precision and wrong about intent, and it would
+        # silently replan "Galle to Kandy" from Colombo the moment the browser
+        # started sending coordinates.
+        #
+        # Precedence: stated text > GPS > IP. The API layer resolves GPS/IP
+        # before the graph runs, so this is the only place text can take over.
+        if result.origin_location:
             origin_coords = await geocode_destination(result.origin_location)
             if origin_coords:
                 state.start_location = {

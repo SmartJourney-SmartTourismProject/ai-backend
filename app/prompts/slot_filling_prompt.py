@@ -38,6 +38,14 @@ extract them as must_avoid tags in the same style as interests. Do not
 infer must_avoid from a lack of enthusiasm - only from an explicit
 exclusion.
 
+must_avoid is about SUBJECT MATTER. When the traveler rules out a whole KIND
+of stop instead - "viewpoints only", "no restaurants", "just places to see,
+I'll find my own food" - put that in exclude_categories using the literal
+values hotel, restaurant or attraction. "Viewpoints only" means the itinerary
+should contain attractions and nothing else, so it excludes both hotel and
+restaurant. Leave exclude_categories empty unless a kind of stop was clearly
+ruled out; wanting fewer of something is pace, not exclusion.
+
 If the traveler indicates how busy they want each day to be ("relaxed",
 "take it easy", "want to see as much as possible", "packed schedule"),
 extract it as pace: relaxed, balanced, or packed. Leave pace null if

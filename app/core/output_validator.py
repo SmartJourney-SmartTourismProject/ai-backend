@@ -60,6 +60,11 @@ class ValidationContext:
     must_avoid_listing_ids: set[str] = field(default_factory=set)  # ids that violate a must_avoid tag
     per_day_rain_probability: dict[str, float] = field(default_factory=dict)
     cost_lookup: dict[str, float] = field(default_factory=dict)  # listing_id -> real recomputed cost
+    # Kinds of stop the traveler ruled out ("viewpoints only"). Checked here
+    # rather than only enforced per planner path: there are four paths that can
+    # build a day, and "give view points only" shipped with three of them
+    # honouring the request and the fourth quietly ignoring it.
+    excluded_categories: set[str] = field(default_factory=set)
     # Part 4 (guardrails) - route/feasibility checks on the LLM planner's own
     # output, mirroring what app/core/itinerary.py already enforces
     # deterministically. All three default to None/absent and degrade to a
@@ -219,6 +224,23 @@ def _must_avoid_respected(plan: PlannerOutput, ctx: ValidationContext) -> Option
     return None
 
 
+def _categories_respected(plan: PlannerOutput, ctx: ValidationContext) -> Optional[str]:
+    """No stop of a kind the traveler ruled out.
+
+    This is the check that makes the requirement hold for every planner path at
+    once, including ones not written yet - which is the point. Enforcing it
+    only where each path builds its constraints means each new path has to
+    remember, and the LLM tool path did not.
+    """
+    if not ctx.excluded_categories:
+        return None
+    offenders = [i.name for i in _all_items(plan) if i.type in ctx.excluded_categories]
+    if offenders:
+        kinds = ", ".join(sorted(ctx.excluded_categories))
+        return f"plan contains {kinds} the traveler excluded: {', '.join(offenders[:3])}"
+    return None
+
+
 def _currency_is_lkr(plan: PlannerOutput) -> Optional[str]:
     if plan.currency != "LKR":
         return f"plan currency is {plan.currency!r}, expected 'LKR'"
@@ -336,6 +358,7 @@ _L2_RULES: list[tuple[str, callable]] = [
     ("weather_respect", lambda p, c: _weather_respect(p, c)),
     ("disaster_avoid", lambda p, c: _disaster_avoid(p, c)),
     ("must_avoid", lambda p, c: _must_avoid_respected(p, c)),
+    ("categories_respected", lambda p, c: _categories_respected(p, c)),
     ("currency", lambda p, c: _currency_is_lkr(p)),
     ("day_ends_by_curfew", lambda p, c: _day_ends_by_curfew(p, c)),
     ("no_absurd_hop", lambda p, c: _no_absurd_hop(p, c)),

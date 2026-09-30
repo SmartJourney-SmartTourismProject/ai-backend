@@ -257,22 +257,45 @@ async def test_origin_location_is_geocoded_when_start_location_missing(monkeypat
     }
 
 
-async def test_origin_location_does_not_override_existing_start_location(monkeypatch):
-    # A GPS fix is a precise answer to the same question the traveler is
-    # answering in words, so it still wins over geocoding a place name.
-    # An IP fix does not - see the test below.
+async def test_a_stated_origin_overrides_even_a_gps_fix(monkeypatch):
+    """Precedence is stated text > GPS > IP.
+
+    GPS answers "where is this device now", which is a different question from
+    "where does this trip start". Trips are planned at home, days ahead: a
+    traveler sitting in Colombo who says "starting from Polonnaruwa" means
+    Polonnaruwa. This originally let GPS win - correct about precision, wrong
+    about intent - and it would have silently replanned "Galle to Kandy" from
+    the sofa the moment the browser began sending coordinates.
+    """
     _patch_llm(monkeypatch, ExtractedSlots(destination="Kandy", origin_location="Polonnaruwa"))
     geocode_mock = AsyncMock(return_value={"lat": 7.9403, "lon": 81.0188})
     monkeypatch.setattr(slot_filling_module, "geocode_destination", geocode_mock)
     state = TripState(
         user_input="Plan a trip to Kandy, I'm starting from Polonnaruwa",
+        start_location={"lat": 6.9271, "lon": 79.8612, "source": "gps"},   # Colombo
+    )
+
+    result = await fill_slots(state)
+
+    assert result.start_location["source"] == "text"
+    assert result.start_location["name"] == "Polonnaruwa"
+    geocode_mock.assert_awaited_once()
+
+
+async def test_a_gps_fix_is_kept_when_no_origin_is_stated(monkeypatch):
+    # The complementary case, and the common one: "I want to go to Galle" with
+    # no departure point named should start from wherever the traveler is.
+    _patch_llm(monkeypatch, ExtractedSlots(destination="Galle"))
+    geocode_mock = AsyncMock(return_value={"lat": 6.0328, "lon": 80.2150})
+    monkeypatch.setattr(slot_filling_module, "geocode_destination", geocode_mock)
+    state = TripState(
+        user_input="I want to go to Galle",
         start_location={"lat": 6.9271, "lon": 79.8612, "source": "gps"},
     )
 
     result = await fill_slots(state)
 
     assert result.start_location == {"lat": 6.9271, "lon": 79.8612, "source": "gps"}
-    geocode_mock.assert_not_called()
 
 
 async def test_stated_origin_overrides_an_ip_derived_start_location(monkeypatch):

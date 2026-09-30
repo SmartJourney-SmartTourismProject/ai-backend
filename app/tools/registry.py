@@ -268,7 +268,16 @@ def build_planning_tools(
                          prefer_price_level_max: Optional[int]) -> dict:
         hotels = _resolve_ids(hotel_ids, item_store)
         attractions = _resolve_ids(attraction_ids, item_store)
-        restaurants = _restaurant_pool()
+        # The fourth planner path, and the one that actually served the
+        # failing request: "give view points only" extracted
+        # exclude_categories=["hotel","restaurant"] correctly, the three
+        # deterministic paths honoured it, and the LLM's own build_day_plan
+        # tool still returned two restaurants because it never looked.
+        excluded = (day_context.exclude_categories if day_context else []) or []
+        wants_restaurants = "restaurant" not in excluded
+        restaurants = _restaurant_pool() if wants_restaurants else []
+        if "hotel" in excluded:
+            hotels = []
         cost_lookup = {
             **_cost_lookup_for(hotels, "hotel"),
             **_cost_lookup_for(restaurants, "restaurant"),
@@ -327,6 +336,7 @@ def build_planning_tools(
             outdoor_tags=outdoor_tags, need_hotel_checkin=real_checkin,
             need_hotel_checkout=real_checkout, prefer_price_level_max=prefer_price_level_max,
             hotel_nights=real_hotel_nights,
+            include_lunch=wants_restaurants, include_dinner=wants_restaurants,
             cost_lookup=cost_lookup,
         )
         plan = _build_day_plan_pure(real_day, real_date, anchor, selections, constraints)
