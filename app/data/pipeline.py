@@ -38,7 +38,10 @@ def _load_registry() -> dict[str, dict]:
     if _REGISTRY:
         return _REGISTRY
 
-    from app.data.connectors import osm_listings, booking_prices, ticketmaster_events
+    from app.data.connectors import (
+        osm_listings, booking_prices, ticketmaster_events,
+        festival_seed, web_events_friday, entry_fees_ccf,
+    )
 
     _REGISTRY = {
         osm_listings.NAME: {
@@ -61,6 +64,29 @@ def _load_registry() -> dict[str, dict]:
             "requires_key": ticketmaster_events.REQUIRES_KEY,
             "scope": ticketmaster_events.SCOPE,
             "display_name": "Ticketmaster events",
+        },
+        festival_seed.NAME: {
+            "connector_cls": festival_seed.FestivalSeedConnector,
+            "cadence": festival_seed.CADENCE,
+            "requires_key": festival_seed.REQUIRES_KEY,
+            "scope": festival_seed.SCOPE,
+            "display_name": "Curated festival seed",
+        },
+        web_events_friday.NAME: {
+            "connector_cls": web_events_friday.FridayEventsConnector,
+            "cadence": web_events_friday.CADENCE,
+            "requires_key": web_events_friday.REQUIRES_KEY,
+            "scope": web_events_friday.SCOPE,
+            "display_name": "friday.lk events (scraped)",
+            "is_scraper": True,
+        },
+        entry_fees_ccf.NAME: {
+            "connector_cls": entry_fees_ccf.CCFEntryFeesConnector,
+            "cadence": entry_fees_ccf.CADENCE,
+            "requires_key": entry_fees_ccf.REQUIRES_KEY,
+            "scope": entry_fees_ccf.SCOPE,
+            "display_name": "CCF entry fees (scraped)",
+            "is_scraper": True,
         },
     }
     return _REGISTRY
@@ -218,9 +244,23 @@ async def _run_connector(name: str, meta: dict, district_filter: Optional[str]) 
             raw = await connector.fetch(district)
             rows = connector.normalize(raw, district)
             upserted = connector.upsert(rows)
-            status = "success" if raw or not meta["requires_key"] else "partial"
-            _finish_run(run_id, status, rows_fetched=len(raw), rows_upserted=upserted)
-            print(f"{upserted} upserted (fetched {len(raw)})")
+            error = None
+            if raw or not meta["requires_key"]:
+                status = "success"
+            else:
+                status = "partial"
+            # A scraper returning 0 rows almost always means the site's
+            # layout changed under it, not that there was genuinely nothing
+            # to find (docs/master_plan/SCRAPE_SOURCES.md) - flagged here
+            # rather than counted as an ordinary success, so it surfaces in
+            # data_source_run / the admin data-health view instead of
+            # quietly going stale.
+            if meta.get("is_scraper") and not raw:
+                status = "partial"
+                error = "0 rows - source layout may have changed (see SCRAPE_SOURCES.md)"
+                logger.warning(f"{name}: 0 rows fetched for {label} - possible site change")
+            _finish_run(run_id, status, rows_fetched=len(raw), rows_upserted=upserted, error=error)
+            print(f"{upserted} upserted (fetched {len(raw)})" + (" [!] 0 rows" if error else ""))
         except Exception as e:
             logger.exception(f"{name} failed for {label}")
             _finish_run(run_id, "failed", error=str(e))

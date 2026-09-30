@@ -249,6 +249,7 @@ class OSMListingsConnector:
             return 0
         return upsert_rows(
             "travel_listing", db_rows, on_conflict=("source", "external_ref"), geo_columns={"location"},
+            insert_only={"is_verified"},
         )
 
 

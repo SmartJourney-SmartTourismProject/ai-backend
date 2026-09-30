@@ -85,6 +85,28 @@ def test_upsert_without_geo_columns_binds_everything_plainly(monkeypatch):
     assert "ST_GeogFromText" not in sql
 
 
+def test_upsert_insert_only_columns_survive_a_resync(monkeypatch):
+    # Regression: connectors write is_verified=False on every sync, and a plain
+    # DO UPDATE SET wrote that back over an admin's approval - the weekly
+    # osm_listings run would have un-verified every listing the planner uses.
+    cur = _patch_conn(monkeypatch, _FakeCursor())
+
+    writer.upsert_rows(
+        "travel_listing",
+        [{"external_ref": "osm-1", "name": "Hotel", "is_verified": False}],
+        on_conflict="external_ref",
+        insert_only={"is_verified"},
+    )
+
+    sql, rows = cur.executemany_calls[0]
+    # Still written on INSERT, so new rows land as pending...
+    assert "is_verified) VALUES" in sql
+    assert rows == [("osm-1", "Hotel", False)]
+    # ...but never overwritten on conflict.
+    assert "is_verified = EXCLUDED.is_verified" not in sql
+    assert "name = EXCLUDED.name" in sql
+
+
 def test_upsert_empty_rows_is_a_noop(monkeypatch):
     cur = _patch_conn(monkeypatch, _FakeCursor())
     assert writer.upsert_rows("travel_listing", [], on_conflict="external_ref") == 0

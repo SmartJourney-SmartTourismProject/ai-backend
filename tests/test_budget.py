@@ -73,6 +73,19 @@ def test_estimate_item_cost_prefers_exact_event_price():
     assert est.basis == "exact"
 
 
+def test_estimate_item_cost_approved_entry_fee_beats_assumed_free_band():
+    # Sigiriya carries no price_level, so without its approved CCF fee the
+    # assumed default band (free, 0011) would price it at 0.
+    table = {**COST_TABLE,
+             (None, "attraction", 1): {"unit": "per_entry", "typical_cost": 0.0, "currency": "LKR",
+                                       "is_assumed_default": True}}
+    item = {"entry_fee": 11690.0, "price_level": None, "currency": "USD"}
+    est = estimate_item_cost(item, "attraction", "district-1", table)
+    assert est.value == 11690.0
+    assert est.basis == "exact"
+    assert est.currency == "LKR"
+
+
 def test_estimate_item_cost_district_reference():
     item = {"price_level": 2}
     est = estimate_item_cost(item, "hotel", "district-1", COST_TABLE)

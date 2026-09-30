@@ -98,10 +98,12 @@ def estimate_item_cost(item: dict, category: str, district_id: Optional[str],
                        cost_table: CostReferenceTable) -> CostEstimate:
     """Precedence (docs/master_plan/DETERMINISM_AND_VALIDATION.md §7):
       1. price_per_night (hotels, from Booking)      -> exact
-      2. price_min (events)                           -> exact
-      3. cost_reference[district][category][level]    -> reference
-      4. cost_reference[None][category][level]         -> national
-      5. nothing available                             -> unknown, value=None
+      2. entry_fee (attractions, admin-approved CCF)  -> exact
+      3. price_min (events)                           -> exact
+      4. cost_reference[district][category][level]    -> reference
+      5. cost_reference[None][category][level]         -> national
+      6. assumed default band (0011)                  -> assumed
+      7. nothing available                             -> unknown, value=None
 
     `category` is required, not read off the item - no dict this codebase
     passes around (app/tools/db_tool.py's _row_to_listing_dict output,
@@ -114,6 +116,10 @@ def estimate_item_cost(item: dict, category: str, district_id: Optional[str],
     because "nothing has a cost" reads as "everything is free"."""
     if item.get("price_per_night") is not None:
         return CostEstimate(float(item["price_per_night"]), item.get("currency", "LKR"), "exact")
+    if item.get("entry_fee") is not None:
+        # Always LKR (listing_entry_fee stores converted prices), whatever
+        # currency the listing row itself declares.
+        return CostEstimate(float(item["entry_fee"]), "LKR", "exact")
     if item.get("price_min") is not None:
         return CostEstimate(float(item["price_min"]), item.get("currency", "LKR"), "exact")
 

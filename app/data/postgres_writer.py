@@ -115,6 +115,7 @@ def upsert_rows(
     rows: list[dict[str, Any]],
     on_conflict: Union[str, Iterable[str]],
     geo_columns: Iterable[str] = (),
+    insert_only: Iterable[str] = (),
 ) -> int:
     """
     Upsert rows into `table`, matching on `on_conflict` - a single column
@@ -131,6 +132,12 @@ def upsert_rows(
     tags text[]) need no special handling - psycopg2 adapts a Python list to
     a Postgres array automatically.
 
+    `insert_only` names columns written on INSERT but never overwritten on
+    conflict - moderation state (is_verified, is_active) above all. Without
+    it, every re-sync wrote the connector's `is_verified=False` back over an
+    admin's approval: the weekly osm_listings run would have un-verified all
+    6,572 listings, and the planner only searches verified ones.
+
     All rows must share the same keys (the ingestion scripts build them from a
     fixed template, so they do).
     """
@@ -143,13 +150,14 @@ def upsert_rows(
 
     conflict_cols = [on_conflict] if isinstance(on_conflict, str) else list(on_conflict)
     geo = set(geo_columns)
+    keep = set(insert_only)
     columns = list(rows[0].keys())
     # ST_GeogFromText() for geography columns, plain %s for everything else.
     placeholders = ", ".join(
         f"ST_GeogFromText(%s)" if col in geo else "%s" for col in columns
     )
     updates = ", ".join(
-        f"{col} = EXCLUDED.{col}" for col in columns if col not in conflict_cols
+        f"{col} = EXCLUDED.{col}" for col in columns if col not in conflict_cols and col not in keep
     )
     sql = (
         f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) "

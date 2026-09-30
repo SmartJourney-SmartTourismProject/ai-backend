@@ -49,18 +49,48 @@ class DataUnavailable(Exception):
 # `location` geography (backend/db/migrations/0001_core.sql) - selecting
 # them directly means no EWKB hex decoding here.
 
-_SELECT_LISTINGS = """
+# {fee_col}/{fee_join}: an admin-approved entry fee (listing_entry_fee,
+# migration 0012), or nothing at all on a database that hasn't applied 0012
+# yet - see _listing_select(). At most one approved fee per listing is
+# enforced by a unique index, so the LEFT JOIN can't duplicate a listing.
+_SELECT_LISTINGS_TEMPLATE = """
     SELECT l.id, l.name, l.description, l.tags, l.price_level, l.price_per_night, l.currency,
            l.latitude, l.longitude, l.rating, l.rating_count, l.popularity, l.photo_url, l.opening_hours,
-           l.has_public_transit, l.nearest_transit_stop
+           l.has_public_transit, l.nearest_transit_stop{fee_col}
     FROM travel_listing l
-    JOIN category c ON c.id = l.category_id
+    JOIN category c ON c.id = l.category_id{fee_join}
     WHERE l.district_id = $1
       AND c.name = $2
       AND l.is_verified = true
       AND l.is_active = true
 """
-_SELECT_LISTINGS_WITH_TAGS = _SELECT_LISTINGS + " AND l.tags && $3"
+_FEE_COL = ", f.foreign_adult AS entry_fee"
+_FEE_JOIN = "\n    LEFT JOIN listing_entry_fee f ON f.listing_id = l.id AND f.status = 'approved'"
+
+_entry_fee_table: Optional[bool] = None
+
+
+async def _listing_select(pool) -> str:
+    """The listing SELECT, with the entry-fee join only if the table exists.
+
+    Live-found 2026-09-30: code that read travel_listing.popularity was
+    pulled before its migration was applied, every listing query failed,
+    and every trip silently became an empty fallback plan. The fee join is
+    optional data, so it must never be able to take listing search down
+    with it. Checked once per process - a positive answer is cached for
+    good; a negative one is re-checked, so applying 0012 needs no restart."""
+    global _entry_fee_table
+    if not _entry_fee_table:
+        try:
+            _entry_fee_table = bool(await pool.fetchval("SELECT to_regclass('public.listing_entry_fee') IS NOT NULL"))
+        except Exception as e:
+            logger.warning(f"db_tool: could not check for listing_entry_fee, querying without fees: {e}")
+            _entry_fee_table = False
+        if not _entry_fee_table:
+            logger.warning("db_tool: listing_entry_fee missing (migration 0012 not applied) - entry fees disabled")
+    if _entry_fee_table:
+        return _SELECT_LISTINGS_TEMPLATE.format(fee_col=_FEE_COL, fee_join=_FEE_JOIN)
+    return _SELECT_LISTINGS_TEMPLATE.format(fee_col="", fee_join="")
 
 _SELECT_EVENTS = """
     SELECT e.id, e.name, e.description, e.start_datetime, e.end_datetime,
@@ -68,8 +98,11 @@ _SELECT_EVENTS = """
     FROM local_event e
     WHERE e.district_id = $1
       AND e.is_verified = true
+      AND e.is_active = true
       AND e.start_datetime <= $3
-      AND e.end_datetime   >= $2
+      -- end_datetime is nullable (a one-evening concert has none); a bare
+      -- `end_datetime >= $2` is NULL for those rows, which hid every one.
+      AND COALESCE(e.end_datetime, e.start_datetime) >= $2
 """
 
 _SELECT_PROFILE = """
@@ -115,6 +148,9 @@ def _row_to_listing_dict(row) -> dict:
         # Wikipedia pageviews - the only popularity signal most
         # attractions have, since ratings exist almost only on hotels.
         "popularity": row["popularity"],
+        # Admin-approved foreign-visitor ticket price (LKR), None when there
+        # is none - app/core/budget.py treats it as an exact price.
+        "entry_fee": float(row["entry_fee"]) if row.get("entry_fee") is not None else None,
         "photo_url": row["photo_url"],
         "opening_hours": row["opening_hours"],
         "has_public_transit": row["has_public_transit"] or False,
@@ -208,13 +244,14 @@ async def _get_listings(
         return []   # legitimately no district to search in - not a DB failure
 
     pool = await _require_pool()
+    select = await _listing_select(pool)
     try:
         if interests:
-            rows = await pool.fetch(_SELECT_LISTINGS_WITH_TAGS, district_id, category, list(interests))
+            rows = await pool.fetch(select + " AND l.tags && $3", district_id, category, list(interests))
             if not rows:
-                rows = await pool.fetch(_SELECT_LISTINGS, district_id, category)
+                rows = await pool.fetch(select, district_id, category)
         else:
-            rows = await pool.fetch(_SELECT_LISTINGS, district_id, category)
+            rows = await pool.fetch(select, district_id, category)
     except Exception as e:
         raise DataUnavailable(f"Listings query failed for district_id={district_id}, category={category}: {e}") from e
 
@@ -265,24 +302,13 @@ async def get_events(destination: str, start_date: str, end_date: str) -> List[d
 # orchestrator agent's TripContext, and re-resolving a place name it already
 # resolved would be wasted work and a second chance to disagree with itself.
 
-_SELECT_LISTINGS_FULL = """
-    SELECT l.id, l.name, l.description, l.tags, l.price_level, l.price_per_night, l.currency,
-           l.latitude, l.longitude, l.rating, l.rating_count, l.popularity, l.photo_url, l.opening_hours,
-           l.has_public_transit, l.nearest_transit_stop
-    FROM travel_listing l
-    JOIN category c ON c.id = l.category_id
-    WHERE l.district_id = $1
-      AND c.name = $2
-      AND l.is_verified = true
-      AND l.is_active = true
-"""
-
-
-def _build_search_listings_query(tags: list[str], must_avoid: list[str], max_price_level, near) -> tuple[str, list]:
+def _build_search_listings_query(select: str, tags: list[str], must_avoid: list[str],
+                                 max_price_level, near) -> tuple[str, list]:
     """Builds the query and its params AFTER district_id/category ($1/$2,
     supplied separately by the caller) - `params` here holds only the
-    extra, conditional filter values, starting at $3."""
-    sql = _SELECT_LISTINGS_FULL
+    extra, conditional filter values, starting at $3. `select` is
+    _listing_select()'s base query."""
+    sql = select
     params: list = []
     next_idx = 3
     if tags:
@@ -329,8 +355,10 @@ async def search_listings_by_district(
     if near is not None and radius_km is not None and near.get("radius_km") is None:
         near = {**near, "radius_km": radius_km}
 
-    sql, extra_params = _build_search_listings_query(tags or [], must_avoid or [], max_price_level, near)
     pool = await _require_pool()
+    sql, extra_params = _build_search_listings_query(
+        await _listing_select(pool), tags or [], must_avoid or [], max_price_level, near,
+    )
     try:
         rows = await pool.fetch(sql, district_id, category, *extra_params, limit)
     except Exception as e:

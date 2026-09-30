@@ -36,6 +36,12 @@ _TAG_VOCABULARY = [
     ("history", "History", False),
     ("food", "Food & Dining", False),
     ("local_food", "Local Cuisine", False),
+    # Event tags (festival_seed, web_events_friday). festival is NOT marked
+    # outdoor even though a perahera is: festivals go ahead in the rain, and
+    # the rainy-day rule would otherwise drop Sri Lanka's biggest events.
+    ("festival", "Festivals", False),
+    ("music", "Live Music", False),
+    ("nightlife", "Nightlife", False),
 ]
 
 _TAG_VOCAB_UPSERT = """

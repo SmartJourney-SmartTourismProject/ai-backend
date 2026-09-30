@@ -115,6 +115,7 @@ class TicketmasterEventsConnector:
         } for r in rows]
         return upsert_rows(
             "local_event", db_rows, on_conflict=("source", "external_ref"), geo_columns={"location"},
+            insert_only={"is_verified"},
         )
 
 

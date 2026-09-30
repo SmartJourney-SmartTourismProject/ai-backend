@@ -406,6 +406,58 @@ async def test_search_events_by_district_returns_items(monkeypatch):
     assert result["items"][0]["id"] == "event-1"
 
 
+class _FeePool(_FakePool):
+    """_FakePool that also answers the listing_entry_fee existence check."""
+
+    def __init__(self, rows=None, fee_table=True):
+        super().__init__(rows)
+        self._fee_table = fee_table
+
+    async def fetchval(self, sql, *args):
+        return self._fee_table
+
+
+async def test_listing_search_joins_approved_entry_fees(monkeypatch):
+    monkeypatch.setattr(db_tool, "_entry_fee_table", None)
+    pool = _FeePool([{**_REAL_LISTING_ROW, "entry_fee": 11690.0}])
+    monkeypatch.setattr(db_tool, "get_pool", AsyncMock(return_value=pool))
+
+    result = await db_tool.search_listings_by_district("d1", "attraction")
+
+    sql, _ = pool.calls[0]
+    assert "LEFT JOIN listing_entry_fee f" in sql and "f.status = 'approved'" in sql
+    assert result["items"][0]["entry_fee"] == 11690.0
+
+
+async def test_listing_search_still_works_before_migration_0012(monkeypatch):
+    # Regression guard for the 2026-09-30 outage shape: optional data from a
+    # not-yet-applied migration must never take listing search down.
+    monkeypatch.setattr(db_tool, "_entry_fee_table", None)
+    pool = _FeePool([_REAL_LISTING_ROW], fee_table=False)
+    monkeypatch.setattr(db_tool, "get_pool", AsyncMock(return_value=pool))
+
+    result = await db_tool.search_listings_by_district("d1", "attraction")
+
+    sql, _ = pool.calls[0]
+    assert "listing_entry_fee" not in sql
+    assert result["total"] == 1
+    assert result["items"][0]["entry_fee"] is None
+
+
+async def test_search_events_query_keeps_open_ended_and_drops_rejected_events(monkeypatch):
+    # Regression: `end_datetime >= $2` is NULL for an event with no end time,
+    # so every such event was silently filtered out; and rejected events
+    # (is_active=false, migration 0008) were still offered to the planner.
+    pool = _FakePool([])
+    monkeypatch.setattr(db_tool, "get_pool", AsyncMock(return_value=pool))
+
+    await db_tool.search_events_by_district("d1", "2026-10-01", "2026-10-05")
+
+    sql, _ = pool.calls[0]
+    assert "COALESCE(e.end_datetime, e.start_datetime) >= $2" in sql
+    assert "e.is_active = true" in sql
+
+
 async def test_search_events_by_district_no_pool_raises_data_unavailable(monkeypatch):
     monkeypatch.setattr(db_tool, "get_pool", AsyncMock(return_value=None))
     with pytest.raises(DataUnavailable):

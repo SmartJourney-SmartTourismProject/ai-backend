@@ -147,3 +147,91 @@ async def test_run_dry_run_executes_nothing(capsys):
         await pipeline.run(source_filter=None, district_filter=None, dry_run=True)
 
     assert ran == []
+
+
+# ---- scraper breakage detection --------------------------------------------
+
+class _GlobalZeroRowConnector:
+    """A scraper connector whose crawl found nothing."""
+    async def fetch(self, district):
+        return []
+
+    def normalize(self, raw, district):
+        return []
+
+    def upsert(self, rows):
+        return 0
+
+
+class _GlobalOneRowConnector:
+    async def fetch(self, district):
+        return [{"x": 1}]
+
+    def normalize(self, raw, district):
+        return raw
+
+    def upsert(self, rows):
+        return len(rows)
+
+
+async def test_scraper_zero_rows_is_flagged_partial_not_silent_success(capsys):
+    meta = {
+        "connector_cls": _GlobalZeroRowConnector, "cadence": "weekly", "requires_key": False,
+        "scope": "global", "display_name": "Some scraper", "is_scraper": True,
+    }
+    finished = {}
+
+    def fake_finish_run(run_id, status, rows_fetched=0, rows_upserted=0, error=None):
+        finished.update(status=status, error=error)
+
+    with patch("app.data.pipeline._start_run", return_value="run-1"), \
+         patch("app.data.pipeline._finish_run", side_effect=fake_finish_run):
+        await pipeline._run_connector("test_scraper_zero", meta, None)
+
+    assert finished["status"] == "partial"
+    assert finished["error"] and "0 rows" in finished["error"]
+    assert "0 rows" in capsys.readouterr().out
+
+
+async def test_scraper_with_rows_is_a_plain_success():
+    meta = {
+        "connector_cls": _GlobalOneRowConnector, "cadence": "weekly", "requires_key": False,
+        "scope": "global", "display_name": "Some scraper", "is_scraper": True,
+    }
+    finished = {}
+
+    def fake_finish_run(run_id, status, rows_fetched=0, rows_upserted=0, error=None):
+        finished.update(status=status, error=error)
+
+    with patch("app.data.pipeline._start_run", return_value="run-1"), \
+         patch("app.data.pipeline._finish_run", side_effect=fake_finish_run):
+        await pipeline._run_connector("test_scraper_ok", meta, None)
+
+    assert finished == {"status": "success", "error": None}
+
+
+async def test_non_scraper_zero_rows_without_a_key_requirement_is_still_success():
+    # A non-scraper (or a keyless scraper) returning 0 rows is not
+    # automatically suspicious - only meta["is_scraper"] triggers the flag.
+    meta = {
+        "connector_cls": _GlobalZeroRowConnector, "cadence": "weekly", "requires_key": False,
+        "scope": "global", "display_name": "Not a scraper",
+    }
+    finished = {}
+
+    def fake_finish_run(run_id, status, rows_fetched=0, rows_upserted=0, error=None):
+        finished.update(status=status, error=error)
+
+    with patch("app.data.pipeline._start_run", return_value="run-1"), \
+         patch("app.data.pipeline._finish_run", side_effect=fake_finish_run):
+        await pipeline._run_connector("test_not_scraper", meta, None)
+
+    assert finished == {"status": "success", "error": None}
+
+
+def test_new_connectors_are_registered():
+    registry = pipeline._load_registry()
+    assert {"festival_seed", "web_events_friday", "entry_fees_ccf"} <= registry.keys()
+    assert registry["web_events_friday"]["is_scraper"] is True
+    assert registry["entry_fees_ccf"]["is_scraper"] is True
+    assert "is_scraper" not in registry["osm_listings"]
