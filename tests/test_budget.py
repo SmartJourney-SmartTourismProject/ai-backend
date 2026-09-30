@@ -210,3 +210,55 @@ def test_check_budget_per_category_breakdown():
     days = [{"hotel": 5000.0, "restaurant": 1000.0}, {"hotel": 5000.0, "restaurant": 1500.0}]
     result = check_budget(days, None)
     assert result.per_category == {"hotel": 10000.0, "restaurant": 2500.0}
+
+
+class TestAssumedCostsPerCategory:
+    """A cost the catalogue does not know must not be invented.
+
+    Live complaint, 2026-09-30: itineraries were charging an entry fee for
+    places that are free to visit. The cause was a single assumed price band
+    (the mid of 1-4) applied to every category, which cost_reference prices at
+    1,500 LKR for an attraction - and 336 of 339 verified attractions carry no
+    price_level at all. Beaches, viewpoints, the Galle Fort ramparts and most
+    temples are free in Sri Lanka, so the tracker was reporting charges that do
+    not exist.
+    """
+
+    TABLE = {
+        (None, "attraction", 1): {"typical_cost": 0.0, "currency": "LKR"},
+        (None, "attraction", 2): {"typical_cost": 1500.0, "currency": "LKR"},
+        (None, "attraction", 3): {"typical_cost": 5000.0, "currency": "LKR"},
+        (None, "restaurant", 2): {"typical_cost": 1800.0, "currency": "LKR"},
+        (None, "hotel", 2): {"typical_cost": 12000.0, "currency": "LKR"},
+    }
+
+    def test_an_attraction_with_no_price_band_is_free(self):
+        est = estimate_item_cost({"id": "a"}, "attraction", None, self.TABLE)
+        assert est.value == 0.0
+        assert est.basis == "assumed"
+
+    def test_a_meal_with_no_price_band_is_not_assumed_free(self):
+        # The mirror case: a restaurant is never free, so assuming zero would
+        # understate every trip that eats.
+        est = estimate_item_cost({"id": "r"}, "restaurant", None, self.TABLE)
+        assert est.value == 1800.0
+
+    def test_a_room_with_no_price_band_is_not_assumed_free(self):
+        est = estimate_item_cost({"id": "h"}, "hotel", None, self.TABLE)
+        assert est.value == 12000.0
+
+    def test_a_stated_price_band_still_wins_over_the_assumption(self):
+        # A ticketed attraction that DOES declare a band must keep its real
+        # price - the assumption only fills a genuine gap.
+        est = estimate_item_cost({"id": "a", "price_level": 3}, "attraction", None, self.TABLE)
+        assert est.value == 5000.0
+        # The point is that it is a looked-up price, not an assumed one; which
+        # of the two lookup branches answered is not what this test guards.
+        assert est.basis != "assumed"
+
+    def test_an_exact_price_still_wins(self):
+        est = estimate_item_cost(
+            {"id": "h", "price_per_night": 26697.2}, "hotel", None, self.TABLE,
+        )
+        assert est.value == 26697.2
+        assert est.basis == "exact"

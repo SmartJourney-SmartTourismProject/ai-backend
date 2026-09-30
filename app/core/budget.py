@@ -16,8 +16,30 @@ from typing import Optional
 
 CostReferenceTable = dict[tuple[Optional[str], str, int], dict]   # (district_id, category, price_level) -> {unit, typical_cost, currency}
 
-# Mid of the 1-4 band, used when a listing carries no price_level of its own.
-_ASSUMED_PRICE_LEVEL = 2
+# The price band to assume when a listing carries none of its own, per
+# category. This is NOT a single number, and getting that wrong was a real
+# defect: assuming the mid band everywhere charged 1,500 LKR to enter every
+# attraction, and 336 of 339 verified attractions have no price_level. Beaches,
+# viewpoints, the Galle Fort ramparts and most temples are free to visit in Sri
+# Lanka, so the budget was inventing charges for them and the tracker's totals
+# could not be trusted.
+#
+#   attraction -> band 1, which cost_reference prices at 0.00: free is the
+#                 correct default here, and a budget must not invent a fee.
+#                 It understates genuinely ticketed sites (Sigiriya, the
+#                 national museums), which _assumed_cost_note surfaces rather
+#                 than hiding.
+#   restaurant -> band 2: a meal is never free, so assuming so would be worse
+#                 than assuming a typical one.
+#   hotel      -> band 2: same reasoning; 665 of them carry a real Booking
+#                 price anyway and never reach this fallback.
+_ASSUMED_PRICE_LEVEL_BY_CATEGORY = {
+    "attraction": 1,
+    "restaurant": 2,
+    "hotel": 2,
+    "event": 2,
+}
+_DEFAULT_ASSUMED_PRICE_LEVEL = 2
 
 # Base allocation, adjusted by travel_style. One dict, tunable in one place.
 DEFAULT_SPLIT = {"stay": 0.40, "food": 0.25, "activity": 0.20, "transport": 0.15}
@@ -105,7 +127,8 @@ def estimate_item_cost(item: dict, category: str, district_id: Optional[str],
     # price_level stays NULL because we genuinely do not know it, and
     # inventing catalogue data to make a total look tidy is the failure
     # mode the grounding checks exist to prevent.
-    row = cost_table.get((district_id, category, _ASSUMED_PRICE_LEVEL)) or         cost_table.get((None, category, _ASSUMED_PRICE_LEVEL))
+    assumed_level = _ASSUMED_PRICE_LEVEL_BY_CATEGORY.get(category, _DEFAULT_ASSUMED_PRICE_LEVEL)
+    row = cost_table.get((district_id, category, assumed_level)) or         cost_table.get((None, category, assumed_level))
     if row is not None:
         return CostEstimate(float(row["typical_cost"]), row.get("currency", "LKR"), "assumed")
 
