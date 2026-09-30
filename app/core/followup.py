@@ -49,9 +49,22 @@ _INFORMATIONAL_PHRASES = [
 ]
 
 
+# Weather questions about the trip already planned ("will it rain on those
+# days?") are answered from the forecast stored with the trip
+# (trip_context.per_day_weather) - live data, which RAG's static knowledge
+# base cannot know. Live-found 2026-09-30: with RAG on, such a question was
+# routed to it and got a generic monsoon paragraph.
+# Whole-word matched: a bare substring test would read "train" as "rain".
+_WEATHER_PATTERN = re.compile(
+    r"\b(rain|rainy|raining|weather|forecast|umbrella|raincoat|sunny|temperature|storm|how hot|how cold)\b",
+    re.IGNORECASE,
+)
+
+
 @dataclass
 class FollowupPlan:
     scope: Literal["full", "shape_only", "informational"]
+    info_kind: Literal["budget", "weather"] = "budget"   # only meaningful when scope == "informational"
     target_days: Optional[list[int]] = None   # None = every day in the itinerary
     cheaper: bool = False
 
@@ -84,5 +97,7 @@ def classify_followup(user_input: str, extracted: ExtractedSlots) -> FollowupPla
     # treated as read-only.
     if not cheaper and not days and any(phrase in text for phrase in _INFORMATIONAL_PHRASES):
         return FollowupPlan(scope="informational")
+    if not cheaper and not days and _WEATHER_PATTERN.search(text):
+        return FollowupPlan(scope="informational", info_kind="weather")
 
     return FollowupPlan(scope="shape_only", target_days=days or None, cheaper=cheaper)

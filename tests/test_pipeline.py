@@ -235,3 +235,12 @@ def test_new_connectors_are_registered():
     assert registry["web_events_friday"]["is_scraper"] is True
     assert registry["entry_fees_ccf"]["is_scraper"] is True
     assert "is_scraper" not in registry["osm_listings"]
+
+
+def test_rag_connectors_are_registered():
+    registry = pipeline._load_registry()
+    assert {"knowledge_wikivoyage", "knowledge_notes"} <= registry.keys()
+    # Wikivoyage returning 0 PAGES fetched is a real breakage signal (site
+    # change); knowledge_notes reads local files, never "breaks" that way.
+    assert registry["knowledge_wikivoyage"]["is_scraper"] is True
+    assert "is_scraper" not in registry["knowledge_notes"]

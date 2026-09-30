@@ -36,7 +36,7 @@ from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-Purpose = Literal["slots", "recommend", "plan", "respond"]
+Purpose = Literal["slots", "recommend", "plan", "respond", "answer"]
 
 # Per-agent output token budgets (DETERMINISM_AND_VALIDATION.md §2 D6c call
 # budget). Deliberately generous for recommend/plan, which carry the
@@ -53,6 +53,9 @@ _TOKEN_BUDGET: dict[Purpose, int] = {
     "recommend": 2048,
     "plan": 3072,
     "respond": 512,
+    # AnswerOutput.answer is capped at 1500 chars (schemas.py) - a few
+    # hundred tokens covers that comfortably with room for citation markers.
+    "answer": 600,
 }
 
 

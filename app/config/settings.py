@@ -57,6 +57,39 @@ class Settings(BaseSettings):
     # makes the LLM path usable, so it stays first for every purpose now.
     llm_provider_chain_groq_first_purposes: str = ""
 
+    # ===== RAG / knowledge base (app/rag/) =====
+    # Off by default: a fresh clone/CI has no embedded chunks yet, and every
+    # retrieve.py caller already degrades to "no answer" rather than
+    # raising when this is False - see app/rag/retrieve.py.
+    enable_rag: bool = False
+
+    # Embedding provider chain - same "<provider>:<model>" shape as
+    # llm_provider_chain (app/core/llm.py), read by app/rag/embeddings.py.
+    # gemini:gemini-embedding-001 first: free tier, and GEMINI_API_KEY is
+    # already configured for the chat LLM above.
+    #
+    # Team decision 2026-09-30: may switch to a paid OpenAI embedding model
+    # later, not yet certain. That switch is meant to be this one line -
+    # EMBEDDING_PROVIDER_CHAIN=openai:text-embedding-3-small - plus
+    # OPENAI_API_KEY and `pip install openai`; embeddings.py's OpenAI branch
+    # is already written, just lazy-imports the `openai` package so it
+    # isn't a hard dependency until then. Switching providers/dimensions
+    # requires a full re-embed (knowledge_chunk.embedding_model records
+    # which model produced each vector) - old and new can't be compared.
+    embedding_provider_chain: str = "gemini:gemini-embedding-001"
+    # Matryoshka-truncated (Gemini's embedding model supports this natively;
+    # OpenAI's text-embedding-3-* models do too) - smaller than the 3072
+    # default, which keeps the HNSW index and the (small) corpus cheap
+    # without a meaningful quality loss for this corpus size.
+    embedding_dim: int = 768
+    openai_api_key: str = ""
+
+    rag_top_k: int = 5
+    # Cosine similarity floor below which retrieve.py reports "nothing
+    # relevant" rather than handing the LLM weak passages to paraphrase
+    # into a confident-sounding wrong answer.
+    rag_min_score: float = 0.55
+
     # ===== Database Configuration =====
     # The single DB setting - points at the same PostgreSQL (PostGIS) instance
     # the NestJS backend owns. See backend/docs/BACKEND_PLAN.md §2 for which

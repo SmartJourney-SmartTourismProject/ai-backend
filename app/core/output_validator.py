@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from app.core.itinerary import DAY_END, DEFAULT_MAX_SINGLE_HOP_MINUTES
+from app.core.itinerary import DAY_END, DEFAULT_MAX_SINGLE_HOP_MINUTES, RAIN_FALLBACK_NOTE, allowed_hop_minutes
 from app.core.scoring import haversine_km, haversine_minutes
 from app.models.schemas import PlannerOutput, ItineraryDay, ItineraryItem
 
@@ -201,8 +201,15 @@ def _weather_respect(plan: PlannerOutput, ctx: ValidationContext) -> Optional[st
     for day in plan.itinerary:
         if ctx.per_day_rain_probability.get(day.date, 0.0) < WEATHER_RAIN_THRESHOLD:
             continue
+        attractions = [i for i in day.items if i.type == "attraction"]
         for item in day.items:
             if item.listing_id in ctx.outdoor_listing_ids:
+                # The builder's rain fallback (app/core/itinerary.py): one
+                # outdoor stop kept, clearly noted, on a day that would
+                # otherwise have no sightseeing at all. Accepted only in that
+                # exact shape - the note alone can't carry a full outdoor day.
+                if RAIN_FALLBACK_NOTE in (item.notes or "") and len(attractions) == 1:
+                    continue
                 return (
                     f"day {day.day} ({day.date}) has rain_probability "
                     f">= {WEATHER_RAIN_THRESHOLD} but still schedules outdoor item "
@@ -303,7 +310,9 @@ def _no_absurd_hop(plan: PlannerOutput, ctx: ValidationContext) -> Optional[str]
         items = day.items
         for prev, cur in zip(items, items[1:]):
             hop = haversine_minutes({"lat": prev.lat, "lon": prev.lon}, {"lat": cur.lat, "lon": cur.lon})
-            if hop > ctx.max_single_hop_minutes:
+            # Same per-pair rule the builder uses (itinerary.allowed_hop_minutes):
+            # a stop the sparse-area rule admitted may be a longer drive.
+            if hop > allowed_hop_minutes(ctx.max_single_hop_minutes, prev.notes, cur.notes):
                 return (
                     f"day {day.day}: the hop from '{prev.name}' to '{cur.name}' is ~{hop:.0f} min, "
                     f"over the {ctx.max_single_hop_minutes:.0f} min single-hop cap"

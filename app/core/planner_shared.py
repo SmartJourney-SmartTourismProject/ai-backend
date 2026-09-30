@@ -15,7 +15,7 @@ from typing import Optional
 
 from app.config.settings import settings
 from app.core.budget import CostReferenceTable, cost_lookup_for
-from app.core.itinerary import DayConstraints, DaySelections, build_day_plan
+from app.core.itinerary import DayConstraints, DaySelections, attraction_candidates, build_day_plan
 from app.core.output_validator import WEATHER_RAIN_THRESHOLD
 from app.core.react import TraceStep
 from app.core.scoring import TravelMatrix
@@ -210,6 +210,20 @@ def assemble_planner_days(
         else:
             warnings.append(f"day {day_num}: no build_day_plan observation and no model output - day dropped")
 
+    # Cross-day repeats: the model can issue several build_day_plan calls in
+    # ONE turn (executed concurrently), so no call sees what the others
+    # scheduled and the same attraction can land on two days (live-found
+    # 2026-09-30: Bembewa on days 1 and 2 of a Hambantota trip). A later day
+    # repeating an earlier day's attraction is rebuilt the same way as an
+    # unbacked day - fill_missing_days excludes the earlier days' stops.
+    seen: set[str] = set()
+    for day in sorted(assembled, key=lambda d: d.day):
+        ids = {i.listing_id for i in day.items if i.type == "attraction" and i.listing_id}
+        if ids & seen and day.day not in unbacked:
+            unbacked.append(day.day)
+            warnings.append(f"day {day.day}: repeated an attraction from an earlier day - rebuilt")
+        seen |= ids
+
     return assembled, warnings, unbacked
 
 
@@ -318,7 +332,13 @@ def fill_missing_days(
         rain_p = day_ctx.per_day_rain_probability.get(day_date, 0.0)
         day_anchor = anchor if day_num == 1 else hotel_anchor
 
-        fresh_attractions = [a for a in attractions if a.get("id") not in used_attraction_ids] or attractions
+        # The recommendation agent's picks first, then the rest of the raw
+        # db_search pool it observed - see itinerary.attraction_candidates
+        # for why the picks alone were too thin to plan a day from.
+        attraction_pool = [] if category_excluded(state, "attraction") else (state.candidate_pools or {}).get("attraction", [])
+        fresh_attractions = attraction_candidates(
+            attractions, attraction_pool, used_attraction_ids, hotel_anchor if day_num > 1 else (hotels[0] if hotels else anchor),
+        )
         fresh_restaurants = [r for r in restaurants if r.get("id") not in used_restaurant_ids] or restaurants
         cost_lookup = {
             **cost_lookup_for(hotels, "hotel", district_id, cost_table),

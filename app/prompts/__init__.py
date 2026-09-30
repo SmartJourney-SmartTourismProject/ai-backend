@@ -7,7 +7,8 @@ triple-quoted instruction text lives outside this package.
 
 Every entry here is live-wired: `slot_filling` by app/utils/slot_filling.py,
 `recommendation`/`planner` by the two remaining app/agents/ ReAct agents,
-`repair` by app/core/orchestrator.py's `_repair_node`. There is no
+`repair` by app/core/orchestrator.py's `_repair_node`, `answer` by its
+`_answer_node` (RAG Q&A, app/rag/). There is no
 `orchestrator` entry anymore - context resolution (destination/district/
 date-window/weather/disaster) became deterministic
 (app/core/context_resolver.py, "C2" in the itinerary-quality/token-
@@ -26,12 +27,14 @@ from app.prompts.slot_filling_prompt import SLOT_FILLING_SPEC
 from app.prompts.recommendation_prompt import RECOMMENDATION_SPEC
 from app.prompts.planner_prompt import PLANNER_SPEC
 from app.prompts.repair_prompt import REPAIR_SPEC
+from app.prompts.answer_prompt import ANSWER_SPEC
 
 PROMPTS: dict[str, PromptSpec] = {
     "slot_filling": SLOT_FILLING_SPEC,
     "recommendation": RECOMMENDATION_SPEC,
     "planner": PLANNER_SPEC,
     "repair": REPAIR_SPEC,
+    "answer": ANSWER_SPEC,
 }
 
 

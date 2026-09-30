@@ -1,0 +1,112 @@
+# Golden evaluation set for the RAG knowledge base (app/rag/), run by
+# scripts/eval_rag.py. Two kinds of case:
+#
+#   answerable: true  - a real Sri Lanka travel question the knowledge base
+#     (Wikivoyage + app/data/knowledge/*.md team notes) should answer.
+#     `expect_source_title` is checked as a case-insensitive substring
+#     against the title of the top-ranked retrieved passage - this is a
+#     retrieval-quality check (did the right document surface at all), not
+#     a check on the LLM's prose.
+#   answerable: false - a question the knowledge base has no business
+#     answering (a different country, or nothing to do with Sri Lanka
+#     travel at all). The system must refuse rather than guess.
+#
+# Chosen to cover: visas, safety/scams, etiquette, transport, health,
+# money, festivals, and out-of-scope refusals - not just one note type.
+
+- question: "Do I need a visa to visit Sri Lanka?"
+  answerable: true
+  expect_source_title: "Electronic Travel Authorization"
+
+- question: "Where do I apply for an ETA?"
+  answerable: true
+  expect_source_title: "Electronic Travel Authorization"
+
+- question: "Can I buy alcohol on a Poya day?"
+  answerable: true
+  expect_source_title: "Poya day alcohol"
+
+- question: "What should I wear when visiting the Temple of the Sacred Tooth Relic?"
+  answerable: true
+  expect_source_title: "Temple and religious site dress code"
+
+- question: "Do I need to take my shoes off at a Buddhist temple?"
+  answerable: true
+  expect_source_title: "Temple and religious site dress code"
+
+- question: "How much should a tuk-tuk cost in Sri Lanka?"
+  answerable: true
+  expect_source_title: "Tuk-tuk"
+
+- question: "What is the tourist police phone number in Sri Lanka?"
+  answerable: true
+  expect_source_title: "Emergency numbers"
+
+- question: "What number do I call for an ambulance in Sri Lanka?"
+  answerable: true
+  expect_source_title: "Emergency numbers"
+
+- question: "Is it safe to drink the tap water in Colombo?"
+  answerable: true
+  expect_source_title: "Drinking water safety"
+
+- question: "How do I get to Ella and see the Nine Arch Bridge?"
+  answerable: true
+  expect_source_title: "Ella"
+
+- question: "When is the best time to visit the east coast beaches like Trincomalee?"
+  answerable: true
+  expect_source_title: "monsoon"
+
+- question: "When is the rainy season on the south coast?"
+  answerable: true
+  expect_source_title: "monsoon"
+
+- question: "Which hand should I eat rice and curry with?"
+  answerable: true
+  expect_source_title: "Left-hand etiquette"
+
+- question: "What are common tourist scams to watch out for in Sri Lanka?"
+  answerable: true
+  expect_source_title: "Sri Lanka"
+
+- question: "Do I need a visa to visit Kandy?"
+  answerable: true
+  expect_source_title: "Electronic Travel Authorization"
+
+- question: "What is Colombo like as a city to visit?"
+  answerable: true
+  expect_source_title: "Colombo"
+
+- question: "What can I see and do in Galle?"
+  answerable: true
+  expect_source_title: "Galle"
+
+- question: "Is Sigiriya worth visiting?"
+  answerable: true
+  expect_source_title: "Sigiriya"
+
+- question: "What should I know about visiting Yala National Park?"
+  answerable: true
+  expect_source_title: "Yala"
+
+- question: "How do I get around Sri Lanka by train?"
+  answerable: true
+  expect_source_title: "Sri Lanka"
+
+# --- out of scope: must refuse, not guess ---
+
+- question: "What's the best nightclub in Paris?"
+  answerable: false
+
+- question: "Do I need a visa to visit Japan?"
+  answerable: false
+
+- question: "What is the capital of Germany?"
+  answerable: false
+
+- question: "How do I bake a chocolate cake?"
+  answerable: false
+
+- question: "What's the weather like in London tomorrow?"
+  answerable: false

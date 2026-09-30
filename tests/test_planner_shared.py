@@ -248,3 +248,24 @@ def test_fill_missing_days_force_rebuild_combines_with_a_genuinely_missing_day()
     assert filled[1].day_cost != 12345.0   # day 2 was force-rebuilt
     assert filled[2].date == "2026-10-03"   # day 3 filled as genuinely missing
     assert len(warnings) == 2
+
+
+def test_a_later_day_repeating_an_earlier_days_attraction_is_marked_for_rebuild():
+    # Regression (live-found 2026-09-30): build_day_plan calls issued in the
+    # same turn run concurrently, so two days can both schedule the same
+    # attraction (Bembewa on days 1 and 2 of a Hambantota trip).
+    trace = [TraceStep(step=1, tool_calls=[
+        _build_day_plan_call(1, "2026-10-01", 500.0),
+        _build_day_plan_call(2, "2026-10-02", 500.0),   # same _ATTR_ID again
+    ])]
+    assembled, warnings, unbacked = assemble_planner_days(trace, [])
+    assert unbacked == [2]
+    assert any("repeated an attraction" in w for w in warnings)
+
+
+def test_days_with_different_attractions_are_left_alone():
+    other = _build_day_plan_call(2, "2026-10-02", 500.0)
+    other.observation["items"][0]["listing_id"] = "33333333-3333-3333-3333-333333333333"
+    trace = [TraceStep(step=1, tool_calls=[_build_day_plan_call(1, "2026-10-01", 500.0), other])]
+    _, _, unbacked = assemble_planner_days(trace, [])
+    assert unbacked == []

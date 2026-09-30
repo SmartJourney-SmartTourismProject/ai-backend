@@ -41,6 +41,7 @@ def _load_registry() -> dict[str, dict]:
     from app.data.connectors import (
         osm_listings, booking_prices, ticketmaster_events,
         festival_seed, web_events_friday, entry_fees_ccf,
+        knowledge_wikivoyage, knowledge_notes,
     )
 
     _REGISTRY = {
@@ -87,6 +88,21 @@ def _load_registry() -> dict[str, dict]:
             "scope": entry_fees_ccf.SCOPE,
             "display_name": "CCF entry fees (scraped)",
             "is_scraper": True,
+        },
+        knowledge_wikivoyage.NAME: {
+            "connector_cls": knowledge_wikivoyage.WikivoyageKnowledgeConnector,
+            "cadence": knowledge_wikivoyage.CADENCE,
+            "requires_key": knowledge_wikivoyage.REQUIRES_KEY,
+            "scope": knowledge_wikivoyage.SCOPE,
+            "display_name": "Wikivoyage knowledge base (RAG)",
+            "is_scraper": True,
+        },
+        knowledge_notes.NAME: {
+            "connector_cls": knowledge_notes.KnowledgeNotesConnector,
+            "cadence": knowledge_notes.CADENCE,
+            "requires_key": knowledge_notes.REQUIRES_KEY,
+            "scope": knowledge_notes.SCOPE,
+            "display_name": "Team-written knowledge notes (RAG)",
         },
     }
     return _REGISTRY

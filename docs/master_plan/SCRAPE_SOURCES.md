@@ -26,6 +26,15 @@ breakage warning) — a layout change is often accompanied by a policy change.
 | Structure | One plain HTML `<table>`: Site · Full Ticket (USD) · Full Ticket (LKR) · Half Ticket (USD) · Half Ticket (LKR). Prices include 18% VAT. **Foreign-visitor prices only** — no local rate is published, so `local_adult` stays NULL. |
 | Data quirks | Group heading rows with no price ("Galle") followed by "- Shipwreck diving tour …" sub-rows — sub-rows are activities, not sites, and are skipped. Typos in site names ("lbbankatuwa") — matching to listings is fuzzy and admin-reviewed. |
 
+### Wikivoyage — Sri Lanka travel guides (`knowledge_wikivoyage` connector, monthly)
+| Check | Finding |
+|---|---|
+| robots.txt | `Disallow: /w/` (blanket, for the generic user-agent) covers page-scraping, not the MediaWiki API route this connector uses (`/w/api.php?action=query`). Same reading, and same route, this project's existing `wikidata_enrich.py`/`wikipedia_popularity.py` connectors already use for Wikipedia (same MediaWiki software) — the API is Wikimedia's own sanctioned machine-access path, documented at meta.wikimedia.org/wiki/User-Agent_policy, provided a descriptive User-Agent, `maxlag`, and a modest rate are used (all three here: `UA` header with a contact address, `maxlag=5`, 1 req/s). |
+| License | CC BY-SA 3.0 — attribution required, stored per document (`knowledge_document.license`/`.url`) and surfaced as a citation link on every answer that uses it, never silently absorbed into an answer with no source shown. |
+| Structure | `action=query&prop=extracts&explaintext=1&exsectionformat=wiki` returns plain text with `== Heading ==` wikitext section markers, parsed by `app/rag/chunking.py` the same way it parses a team note's Markdown headings. |
+| Coverage, measured 2026-09-30 | 68 pages (country page + 9 province/region guides + 58 city/place guides), 928 chunks. Page → district placed via the existing `resolve_place()` geocoder, never dropped for a weak match — falls back to country-level (`district_id NULL`) rather than being discarded. |
+| Live data quirk | A page can carry current-events prose that will date (e.g. the Ella page's live note on Cyclone Ditwah rail disruption, still present as of this ingest) — expected of a community-edited source, not a bug; `last_verified` stays NULL for Wikivoyage documents specifically because no one has actually checked this run's content against an official source, unlike the hand-verified team notes. |
+
 ## Rejected
 | Source | Reason |
 |---|---|

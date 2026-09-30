@@ -42,6 +42,28 @@ async def fill_slots(state: TripState) -> TripState:
             ("human", state.user_input),
         ])
 
+        state.intent = result.intent
+        state.question = result.question
+
+        if result.intent == "weather":
+            # A weather question never builds or changes a plan: the named
+            # place goes to weather_place, NOT destination (asking about
+            # Colombo's weather mid-way through a Kandy trip must not turn
+            # the trip into a Colombo one), and nothing else is merged.
+            state.weather_place = result.destination
+            state.weather_when = result.weather_when
+            if state.weather_place:
+                try:
+                    place = await resolve_place(state.weather_place)
+                except Exception:
+                    place = None
+                if place and place["confidence"] == "out_of_country":
+                    state.clarification_needed = (
+                        f"SmartJourney currently covers Sri Lanka only. {state.weather_place} is in "
+                        f"{place['country']} — ask me about the weather anywhere in Sri Lanka."
+                    )
+            return state
+
         if state.is_followup:
             # Classified from THIS turn's raw extraction, before the merge
             # below overwrites state - classify_followup needs to see what
@@ -51,6 +73,7 @@ async def fill_slots(state: TripState) -> TripState:
             state.followup_scope = plan.scope
             state.followup_target_days = plan.target_days
             state.followup_cheaper = plan.cheaper
+            state.followup_info = plan.info_kind
 
             if result.destination:
                 state.destination = result.destination
@@ -162,6 +185,14 @@ async def fill_slots(state: TripState) -> TripState:
             return state
 
     if state.is_followup:
+        return state
+
+    # A pure question ("do I need a visa?") never builds a plan, so it must
+    # never be blocked on "which destination?" - that clarification exists
+    # for plan requests, and a first-turn question with no destination is
+    # the normal case, not a missing field. "both" still needs one, since
+    # it's also asking for a plan.
+    if state.intent == "question":
         return state
 
     if state.destination and state.duration_days is None:

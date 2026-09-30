@@ -497,3 +497,23 @@ async def test_must_avoid_and_pace_default_to_empty_and_none():
     state = TripState(user_input="anything")
     assert state.must_avoid == []
     assert state.pace is None
+
+
+async def test_weather_intent_keeps_the_named_place_out_of_the_trip(monkeypatch):
+    # "will it rain in Colombo?" mid-way through a Kandy trip must not turn
+    # it into a Colombo trip, and must not ask "which destination?".
+    _patch_llm(monkeypatch, ExtractedSlots(destination="Colombo", intent="weather", weather_when="tomorrow"))
+    state = TripState(user_input="will it rain tomorrow in colombo", destination="Kandy", is_followup=True)
+    result = await fill_slots(state)
+
+    assert result.destination == "Kandy"
+    assert result.weather_place == "Colombo" and result.weather_when == "tomorrow"
+    assert result.clarification_needed is None
+
+
+async def test_weather_intent_outside_sri_lanka_is_refused(monkeypatch):
+    _patch_llm(monkeypatch, ExtractedSlots(destination="London", intent="weather", weather_when="tomorrow"),
+               place={"name": "London", "lat": 51.5, "lon": -0.1, "district_id": None,
+                      "confidence": "out_of_country", "country": "United Kingdom"})
+    result = await fill_slots(TripState(user_input="weather in london tomorrow"))
+    assert "Sri Lanka only" in result.clarification_needed

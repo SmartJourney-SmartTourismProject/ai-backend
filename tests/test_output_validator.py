@@ -380,3 +380,48 @@ def test_day_scoped_target_bails_when_any_single_failure_is_unrecognized():
 def test_day_scoped_target_bails_on_an_l1_referential_failure():
     failures = ["L1.listing_id: 'x' on day 1 ('Hotel') was never returned by a db_search_* observation"]
     assert day_scoped_repair_target(failures) is None
+
+
+# ---- 2026-09-30 sparse-area / rain markers ----------------------------------
+
+from app.core.itinerary import RAIN_FALLBACK_NOTE, SPARSE_DAY_NOTE  # noqa: E402
+from app.core.scoring import haversine_minutes  # noqa: E402
+
+
+def test_weather_respect_accepts_the_builders_single_noted_rain_fallback():
+    plan = _plan(days=[_day(items=[_item(listing_id=VALID_UUID_1, notes=RAIN_FALLBACK_NOTE)])])
+    ctx = _ctx(per_day_rain_probability={"2026-10-01": 0.9}, outdoor_listing_ids={VALID_UUID_1})
+    assert not any("weather_respect" in f for f in validate(plan, ctx).failures)
+
+
+def test_weather_respect_rejects_the_note_on_a_day_with_more_than_one_attraction():
+    # The note can't carry a full outdoor day - only the lone fallback stop.
+    plan = _plan(days=[_day(items=[
+        _item(listing_id=VALID_UUID_1, time="09:00", end_time="10:00", notes=RAIN_FALLBACK_NOTE),
+        _item(listing_id=VALID_UUID_2, time="10:15", end_time="11:00", lat=7.291, lon=80.631),
+    ])])
+    ctx = _ctx(per_day_rain_probability={"2026-10-01": 0.9}, outdoor_listing_ids={VALID_UUID_1})
+    assert any("weather_respect" in f for f in validate(plan, ctx).failures)
+
+
+def _hop_pair_minutes(lat2):
+    return haversine_minutes({"lat": 7.29, "lon": 80.63}, {"lat": lat2, "lon": 80.63})
+
+
+def test_no_absurd_hop_allows_a_longer_drive_to_a_sparse_marked_stop():
+    lat2 = 7.29 + 0.45   # ~50 km: over 45 min, under 90
+    assert 45 < _hop_pair_minutes(lat2) < 90
+    plan = _plan(days=[_day(items=[
+        _item(listing_id=VALID_UUID_1, time="09:00", end_time="10:00"),
+        _item(listing_id=VALID_UUID_2, time="11:30", end_time="12:30", lat=lat2, notes=SPARSE_DAY_NOTE),
+    ])])
+    assert not any("no_absurd_hop" in f for f in validate(plan, _ctx(max_single_hop_minutes=45.0)).failures)
+
+
+def test_no_absurd_hop_still_rejects_that_hop_without_the_marker():
+    lat2 = 7.29 + 0.45
+    plan = _plan(days=[_day(items=[
+        _item(listing_id=VALID_UUID_1, time="09:00", end_time="10:00"),
+        _item(listing_id=VALID_UUID_2, time="11:30", end_time="12:30", lat=lat2),
+    ])])
+    assert any("no_absurd_hop" in f for f in validate(plan, _ctx(max_single_hop_minutes=45.0)).failures)

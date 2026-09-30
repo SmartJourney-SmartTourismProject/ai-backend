@@ -34,6 +34,20 @@ except ImportError:
 _pool = None
 
 
+async def _register_codecs(conn) -> None:
+    """Runs once per pooled connection (asyncpg's init hook, not per
+    query) - registers pgvector's vector <-> Python-list codec so
+    app/rag/retrieve.py can bind/read knowledge_chunk.embedding as a plain
+    list[float], same as every other column. A missing `vector` extension
+    (migration 0013 not applied yet) must not break every OTHER query this
+    pool serves - caught and logged, not raised."""
+    try:
+        from pgvector.asyncpg import register_vector
+        await register_vector(conn)
+    except Exception as e:
+        logger.debug(f"pgvector codec not registered (migration 0013 not applied?): {e}")
+
+
 async def get_pool():
     """
     Lazily create and cache one pool per process. Returns None when the
@@ -58,6 +72,7 @@ async def get_pool():
         try:
             _pool = await asyncpg.create_pool(
                 settings.database_url, min_size=1, max_size=5, timeout=5,
+                init=_register_codecs,
             )
         except Exception as e:
             # Configured but unreachable - that IS worth a warning, since it

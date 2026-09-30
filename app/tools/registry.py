@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 from app.tools.db_tool import search_listings_by_district
 from app.core.scoring import ScoringContext, TravelMatrix, rank
 from app.core.budget import CostReferenceTable, estimate_item_cost, check_budget as _check_budget_pure
-from app.core.itinerary import DayConstraints, DaySelections, build_day_plan as _build_day_plan_pure
+from app.core.itinerary import DayConstraints, DaySelections, attraction_candidates, build_day_plan as _build_day_plan_pure
 from app.core.output_validator import WEATHER_RAIN_THRESHOLD
 from app.core.planner_shared import DayContext
 
@@ -235,6 +235,15 @@ def build_planning_tools(
     # here too so day 2 doesn't repeat day 1's restaurant just because it's
     # still the nearest candidate.
     used_restaurant_ids: set[str] = set()
+    # Attractions used per DAY, not one flat set: the model can call
+    # build_day_plan for the same day more than once (a retry), and a flat
+    # set made the retry treat that day's own stops as "used elsewhere".
+    used_attractions_by_day: dict[int, set[str]] = {}
+
+    def _attractions_for_day(day: int, chosen: list[dict], base: dict) -> list[dict]:
+        used_elsewhere = set().union(*(ids for d, ids in used_attractions_by_day.items() if d != day))
+        pool = [item for item in item_store.values() if item.get("category") == "attraction"]
+        return attraction_candidates(chosen, pool, used_elsewhere, base)
 
     def _restaurant_pool() -> list[dict]:
         all_restaurants = [item for item in item_store.values() if item.get("category") == "restaurant"]
@@ -268,6 +277,10 @@ def build_planning_tools(
                          prefer_price_level_max: Optional[int]) -> dict:
         hotels = _resolve_ids(hotel_ids, item_store)
         attractions = _resolve_ids(attraction_ids, item_store)
+        attractions = _attractions_for_day(
+            day_context and min(max(day, 1), day_context.duration_days) or day,
+            attractions, hotels[0] if hotels else anchor,
+        )
         # The fourth planner path, and the one that actually served the
         # failing request: "give view points only" extracted
         # exclude_categories=["hotel","restaurant"] correctly, the three
@@ -348,6 +361,9 @@ def build_planning_tools(
         for it in plan.items:
             if it.type == "restaurant" and it.listing_id:
                 used_restaurant_ids.add(it.listing_id)
+        used_attractions_by_day[real_day] = {
+            it.listing_id for it in plan.items if it.type == "attraction" and it.listing_id
+        }
         return {
             "items": [
                 {"time": it.time, "end_time": it.end_time, "type": it.type, "listing_id": it.listing_id,

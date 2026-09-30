@@ -61,11 +61,36 @@ items_per_day and items_per_day_delta for the same message - a number
 statement and a comparative statement are mutually exclusive. Leave both
 null if the traveler said nothing about density; this is distinct from
 pace ("relaxed"/"packed" are a general feel, not a request to change the
-day's count from whatever it already was)."""
+day's count from whatever it already was).
+
+Also decide intent:
+- "plan" (the default) - a trip request or a change to one, with no
+  question about Sri Lanka travel attached. Most messages are this.
+- "question" - the message ONLY asks something about Sri Lanka travel
+  (visas, safety, scams, customs/etiquette, transport, costs, health,
+  festivals) and does not ask to build or change a trip plan. Examples:
+  "do I need a visa?", "is tap water safe to drink?", "what should I wear
+  at a temple?", "any scams to watch out for in Colombo?".
+- "both" - the message asks a question of that kind AND also requests or
+  changes a plan in the same message, e.g. "plan 2 days in Kandy, and are
+  there any scams I should watch out for?".
+- "weather" - the message asks about the weather, forecast, rain or whether
+  to take an umbrella, for a day or a place, and does not ask to build or
+  change a plan. Examples: "will it rain tomorrow in Colombo?", "should I
+  take an umbrella today?", "will it rain on those days?". For "weather",
+  put the place (if one is named) in `destination` and set `weather_when`:
+  today / tomorrow / day_after_tomorrow; trip_dates if they mean their
+  planned trip ("on those days", "during my trip"); otherwise next_days.
+  Misspellings like "tommorow" still mean tomorrow.
+When intent is "question" or "both", put the traveler's question (verbatim,
+or lightly cleaned up if it is a sentence fragment) in the `question` field.
+Leave `question` null when intent is "plan". A plain trip request with no
+question in it is always "plan" - do not invent a question that was not
+asked."""
 
 SLOT_FILLING_SPEC = PromptSpec(
     name="slot_filling",
-    version="1.2.0",   # Part 3: added items_per_day / items_per_day_delta
+    version="1.4.0",   # weather intent + weather_when
     system=SLOT_FILLING_SYSTEM_PROMPT,
     output_schema=ExtractedSlots,
 )

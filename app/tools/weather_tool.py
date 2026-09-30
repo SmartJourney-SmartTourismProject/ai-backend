@@ -1,10 +1,12 @@
 # app/tools/weather_tool.py
 from collections import defaultdict
+from datetime import datetime
 
 import httpx
 
 from app.config.settings import settings
 from app.utils.cache import cache_get, cache_set
+from app.utils.clock import SRI_LANKA_TZ
 
 
 CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather"
@@ -12,11 +14,29 @@ FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
 WEATHER_CACHE_TTL_SECONDS = 45 * 60  # 45 minutes
 
 
+def _for_dates(result: dict, dates: list[str]) -> dict:
+    """`result` narrowed to `dates` (every forecast day when `dates` is empty)."""
+    if not dates:
+        return result
+    wanted = set(dates)
+    return {**result, "forecast": [d for d in result["forecast"] if d["date"] in wanted]}
+
+
+def _local_date(slice_: dict) -> str:
+    """The Sri Lanka calendar date a 3-hour slice belongs to. OpenWeather's
+    `dt_txt` is a UTC date, which files the 00:00-05:30 local slices under
+    the previous day; `dt` (unix seconds) converted with the explicit
+    Asia/Colombo zone is right regardless of the server's own timezone."""
+    if "dt" in slice_:
+        return datetime.fromtimestamp(slice_["dt"], tz=SRI_LANKA_TZ).date().isoformat()
+    return slice_["dt_txt"].split(" ")[0]
+
 
 async def get_weather(lat: float, lon: float, dates: list[str]) -> dict | None:
     """
     Returns current conditions plus a per-date forecast summary for the
-    given `dates` (ISO strings, e.g. "2026-08-25").
+    given `dates` (ISO strings, e.g. "2026-08-25"); an empty `dates` returns
+    every day OpenWeather forecasts (about 5).
     Shape:
       {
         "current": {"temp": float, "condition": str, "humidity": int},
@@ -29,12 +49,15 @@ async def get_weather(lat: float, lon: float, dates: list[str]) -> dict | None:
     On any failure (bad key, network issue, API down), returns None —
     never raises. The Planner proceeds without weather in that case.
     """
-
+    # Cached UNFILTERED and narrowed to `dates` per call. It used to cache
+    # the already-filtered result, so the first caller for a place decided
+    # what every later caller got for the next 45 minutes - a "tomorrow"
+    # question after a 3-day plan could get the plan's days back instead.
     cache_key = f"weather:{lat:.2f}:{lon:.2f}"
     cached = await cache_get(cache_key)
     if cached:
-        return cached
-    
+        return _for_dates(cached, dates)
+
     if not settings.openweather_api_key:
         return None
 
@@ -62,23 +85,13 @@ async def get_weather(lat: float, lon: float, dates: list[str]) -> dict | None:
             "humidity": current_data["main"]["humidity"],
         }
 
-        # Group the 3-hour slices by calendar date
+        # Group the 3-hour slices by Sri Lanka calendar date.
         by_date: dict[str, list[dict]] = defaultdict(list)
         for slice_ in forecast_data.get("list", []):
-            # dt_txt is already a UTC date string from OpenWeather - using
-            # it (instead of fromtimestamp(), which applies the SERVER's
-            # local timezone) avoids forecast days silently shifting or
-            # dropping depending on where this runs.
-            slice_date = slice_["dt_txt"].split(" ")[0]
-            by_date[slice_date].append(slice_)
-
-        wanted_dates = set(dates) if dates else set(by_date.keys())
+            by_date[_local_date(slice_)].append(slice_)
 
         forecast = []
         for day, slices in sorted(by_date.items()):
-            if day not in wanted_dates:
-                continue
-
             temps = [s["main"]["temp"] for s in slices]
             pops = [s.get("pop", 0.0) for s in slices]  # probability of precipitation, 0-1
 
@@ -95,8 +108,7 @@ async def get_weather(lat: float, lon: float, dates: list[str]) -> dict | None:
 
         result = {"current": current, "forecast": forecast}
         await cache_set(cache_key, result, WEATHER_CACHE_TTL_SECONDS)
-        return result
-
+        return _for_dates(result, dates)
 
     except Exception:
         return None

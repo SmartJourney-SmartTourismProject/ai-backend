@@ -85,7 +85,8 @@ def test_build_day_plan_drops_a_single_far_hop_early_in_the_day():
     matrix.set(ANCHOR, ATTRACTION_1, 63.0)   # the lone far hop, right at the start
     matrix.set(ATTRACTION_1, ATTRACTION_2, 5.0)
     matrix.set(ATTRACTION_2, ATTRACTION_1, 63.0)
-    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False)
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False,
+                                 sparse_widening=False)   # isolates the plain hop cap
     plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
 
     attraction_ids = [i.listing_id for i in plan.items if i.type == "attraction"]
@@ -107,12 +108,42 @@ def test_build_day_plan_leashes_a_stop_reached_by_individually_legal_hops():
     matrix.set(ATTRACTION_1, ATTRACTION_2, 40.0)    # legal hop onward...
     matrix.set(ATTRACTION_2, ATTRACTION_1, 40.0)
     matrix.set(ANCHOR, ATTRACTION_2, 58.0)          # ...but 58min from base
-    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False)
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False,
+                                 sparse_widening=False)   # isolates the plain leash
     plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
 
     attraction_ids = [i.listing_id for i in plan.items if i.type == "attraction"]
     assert attraction_ids == ["a1"]
     assert plan.dropped == [{"id": "a2", "reason": "too_far_from_day_anchor"}]
+
+
+def test_leash_is_measured_from_the_hotel_when_the_day_checks_in_not_from_a_far_start():
+    # Regression (live-found 2026-09-30): a 2-day Hambantota plan returned
+    # only the hotel. Day 1's anchor was the route's START, hours away from
+    # the destination, so every attraction was "too far from the day anchor"
+    # even though Kirinde Beach was 10 km from the hotel actually being
+    # stayed at. The leash must measure from the day's real base.
+    matrix = TravelMatrix()
+    matrix.set(ANCHOR, ATTRACTION_1, 240.0)   # far from the START point...
+    matrix.set(HOTEL, ATTRACTION_1, 10.0)     # ...but next door to the hotel
+    matrix.set(ANCHOR, HOTEL, 30.0)
+    constraints = DayConstraints(items_target=1, include_lunch=False, include_dinner=False,
+                                 need_hotel_checkin=True)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(attractions=[ATTRACTION_1]), constraints, matrix)
+
+    assert [i.listing_id for i in plan.items if i.type == "attraction"] == ["a1"]
+    assert plan.dropped == []
+
+
+def test_leash_still_drops_a_stop_far_from_the_hotel_on_a_checkin_day():
+    matrix = TravelMatrix()
+    matrix.set(HOTEL, ATTRACTION_1, 120.0)    # genuinely far from the hotel
+    matrix.set(ANCHOR, HOTEL, 30.0)
+    constraints = DayConstraints(items_target=1, include_lunch=False, include_dinner=False,
+                                 need_hotel_checkin=True)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(attractions=[ATTRACTION_1]), constraints, matrix)
+
+    assert plan.dropped == [{"id": "a1", "reason": "too_far_from_day_anchor"}]
 
 
 def test_build_day_plan_anchor_leash_can_be_disabled():
@@ -387,3 +418,67 @@ def test_day_never_runs_past_day_end():
         assert item.end_time <= DAY_END
     day_end_drops = [d for d in plan.dropped if d["reason"] == "day_would_run_past_end"]
     assert day_end_drops   # at least one hike had to be dropped to fit the day
+
+
+# ---- 2026-09-30 sparse-area / rain pass (A1-A3) -----------------------------
+
+from app.core.itinerary import RAIN_FALLBACK_NOTE, SPARSE_DAY_NOTE  # noqa: E402
+
+FAR_RESTAURANT = {"id": "rf", "name": "Far Restaurant", "lat": 7.29, "lon": 80.63, "currency": "LKR"}
+
+
+def test_checkout_day_never_ends_with_a_hop_over_the_cap():
+    # A1 regression (Hambantota, live 2026-09-30): no attractions, a forced
+    # lunch, then the check-out leg ~54 min back to the hotel - a day the
+    # validator's no_absurd_hop rejected. The meal must be skipped instead.
+    matrix = TravelMatrix()
+    matrix.set(HOTEL, FAR_RESTAURANT, 40.0)     # reachable going out...
+    matrix.set(FAR_RESTAURANT, HOTEL, 54.0)     # ...but not the drive back
+    constraints = DayConstraints(items_target=0, need_hotel_checkout=True, include_dinner=False)
+    plan = build_day_plan(2, "2026-10-01", HOTEL, _selections(attractions=[], restaurants=[FAR_RESTAURANT]),
+                          constraints, matrix)
+
+    names = [i.name for i in plan.items]
+    assert "Far Restaurant" not in names and names[-1] == "Test Hotel"
+    assert {"id": "rf", "reason": "restaurant_unreachable"} in plan.dropped
+
+
+def test_rain_keeps_one_noted_outdoor_stop_instead_of_an_empty_day():
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False,
+                                 exclude_outdoor=True, outdoor_tags=frozenset({"hike"}))
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(attractions=[ATTRACTION_OUTDOOR]), constraints)
+
+    [stop] = [i for i in plan.items if i.type == "attraction"]
+    assert stop.listing_id == "a3" and RAIN_FALLBACK_NOTE in stop.notes
+
+
+def test_rain_fallback_does_not_fire_when_an_indoor_stop_exists():
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False,
+                                 exclude_outdoor=True, outdoor_tags=frozenset({"hike"}))
+    plan = build_day_plan(1, "2026-10-01", ANCHOR,
+                          _selections(attractions=[ATTRACTION_1, ATTRACTION_OUTDOOR]), constraints)
+    assert [i.listing_id for i in plan.items if i.type == "attraction"] == ["a1"]
+    assert all(RAIN_FALLBACK_NOTE not in i.notes for i in plan.items)
+
+
+def test_sparse_area_widens_the_leash_and_marks_the_longer_drive():
+    matrix = TravelMatrix()
+    matrix.set(ANCHOR, ATTRACTION_1, 10.0)
+    matrix.set(ANCHOR, ATTRACTION_2, 70.0)      # beyond 45, within the 90 sparse leash
+    matrix.set(ATTRACTION_1, ATTRACTION_2, 65.0)
+    matrix.set(ATTRACTION_2, ATTRACTION_1, 65.0)
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
+
+    by_id = {i.listing_id: i for i in plan.items if i.type == "attraction"}
+    assert set(by_id) == {"a1", "a2"}
+    assert SPARSE_DAY_NOTE in by_id["a2"].notes and by_id["a1"].notes == ""
+
+
+def test_sparse_widening_never_admits_a_stop_beyond_90_minutes():
+    matrix = TravelMatrix()
+    matrix.set(ANCHOR, ATTRACTION_1, 10.0)
+    matrix.set(ANCHOR, ATTRACTION_2, 120.0)
+    constraints = DayConstraints(items_target=2, include_lunch=False, include_dinner=False)
+    plan = build_day_plan(1, "2026-10-01", ANCHOR, _selections(), constraints, matrix)
+    assert [i.listing_id for i in plan.items if i.type == "attraction"] == ["a1"]

@@ -231,7 +231,13 @@ def test_day_context_forces_exclude_outdoor_on_a_rainy_day_but_never_forces_it_o
         "day": 1, "date": "2026-10-01", "anchor": {"lat": 7.29, "lon": 80.63},
         "attraction_ids": ["a1"], "exclude_outdoor": False,   # the model says it's fine - overridden by real rain
     })
-    assert result["items"] == []   # the only candidate was outdoor-tagged, and rain forces exclusion
+    # Rain forces the exclusion (the model's False is overridden), and since
+    # that would leave the day empty, the rain fallback keeps the one outdoor
+    # stop - clearly noted - rather than serving no sightseeing at all.
+    from app.core.itinerary import RAIN_FALLBACK_NOTE
+    [only] = result["items"]
+    assert only["listing_id"] == "a1"
+    assert RAIN_FALLBACK_NOTE in only["notes"]
 
 
 def test_day_context_clamps_items_target_to_the_travelers_pace_but_not_below_it():
@@ -263,3 +269,36 @@ def test_no_day_context_keeps_the_old_behavior_of_trusting_the_models_args():
     })
     assert result["day"] == 9
     assert result["date"] == "2099-01-01"
+
+
+def test_build_day_plan_tops_up_a_day_with_nearby_unused_attractions_and_never_repeats_one():
+    # Regression (live-found 2026-09-30): a day whose model-picked
+    # attractions were far from the hotel came back with only the hotel
+    # while nearer candidates sat unused in the pool; and the model could
+    # name the same attraction for two different days.
+    import asyncio
+    from app.core.planner_shared import DayContext
+    from app.tools.registry import build_planning_tools
+    from datetime import date
+
+    hotel = {"id": "h1", "name": "Hotel", "lat": 6.27, "lon": 81.26, "category": "hotel"}
+    near = {"id": "near", "name": "Near Beach", "lat": 6.28, "lon": 81.27, "category": "attraction", "tags": []}
+    far = {"id": "far", "name": "Far Ruins", "lat": 6.80, "lon": 81.90, "category": "attraction", "tags": []}
+    store = {i["id"]: i for i in (hotel, near, far)}
+    ctx = DayContext(start_date=date(2026, 10, 1), duration_days=2, per_day_rain_probability={},
+                     expected_items_per_day=2, exclude_categories=[])
+    tools = {t.name: t for t in build_planning_tools({}, store, frozenset(), "d1", ctx)}
+
+    def build(day):
+        return tools["build_day_plan"].func(
+            day=day, date="2026-10-01", anchor={"lat": 6.27, "lon": 81.26}, hotel_ids=["h1"],
+            attraction_ids=["far"], items_target=2, exclude_outdoor=False,
+            need_hotel_checkin=day == 1, need_hotel_checkout=day == 2, prefer_price_level_max=None,
+        )
+
+    day1 = build(1)
+    names1 = [i["name"] for i in day1["items"] if i["type"] == "attraction"]
+    assert names1 == ["Near Beach"]          # the far pick was dropped, the near one topped up
+
+    day2 = build(2)
+    assert "Near Beach" not in [i["name"] for i in day2["items"]]   # never repeated on a later day

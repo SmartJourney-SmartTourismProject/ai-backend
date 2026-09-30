@@ -100,6 +100,10 @@ redis
 # holidays -> official (gazette) Sri Lankan Poya calendar for festival_seed's
 #             date rules - docs/master_plan/SCRAPE_SOURCES.md.
 holidays==0.105
+# pgvector -> psycopg2/asyncpg adapters for knowledge_chunk.embedding
+#             (RAG, app/rag/) - binds a Python list to/from Postgres'
+#             `vector` type; no vector math of its own.
+pgvector==0.5.0
 
 # faiss-cpu and sentence-transformers moved to requirements-rag.txt -
 # RAG is demoted and off by default (decision D11, PROJECT_MASTER_PLAN.md).

@@ -26,6 +26,7 @@ class TripState(BaseModel):
     followup_scope: Optional[str] = None   # "full" | "shape_only" | None (not a follow-up)
     followup_target_days: Optional[List[int]] = None   # None = every day
     followup_cheaper: bool = False
+    followup_info: str = "budget"   # "budget" | "weather" - what an informational follow-up asks about
 
     # Trip details
     destination: Optional[str] = None
@@ -63,6 +64,27 @@ class TripState(BaseModel):
     weather: Optional[dict] = None
     disaster: Optional[dict] = None     # {"safe": bool, "active_events": [...]}
     clarification_needed: Optional[str] = None
+
+    # RAG Q&A (app/rag/, app/models/schemas.py's ExtractedSlots.intent),
+    # set by app/utils/slot_filling.py from THIS turn's extraction - never
+    # carried over on a follow-up the way destination/budget/etc are,
+    # since "intent" describes this message, not the trip. "question"/
+    # "both" route through app/core/orchestrator.py's _answer_node before
+    # _respond_node; "plan" (the default) never touches it.
+    intent: str = "plan"
+    question: Optional[str] = None
+    # intent="weather" (app/core/orchestrator.py's _weather_node): the place
+    # the traveller named for THIS weather question - kept apart from
+    # `destination` so "will it rain in Colombo?" mid-way through a Kandy
+    # trip never changes the trip - and which day(s) they meant.
+    weather_place: Optional[str] = None
+    weather_when: Optional[str] = None
+    # _answer_node's result. `answer` rides separately from final_response
+    # (same reasoning as budget_notes above) so _respond_node composes the
+    # two deliberately rather than one silently overwriting the other on
+    # an intent="both" turn.
+    answer: Optional[str] = None
+    sources: List[dict] = Field(default_factory=list)   # [{"title", "url", "section", "license"}]
 
     # AI outputs (final, ranked selections)
     attractions: List[dict] = Field(default_factory=list)

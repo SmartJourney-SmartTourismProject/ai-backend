@@ -1,5 +1,8 @@
 #Graph Edges validate -> policy -> slot_fill -> orchestrate -> recommend -> plan -> verify -> (repair|fallback) -> respond
 #            slot_fill -> targeted_replan -> verify -> respond   (shape-only follow-up, no LLM - see app/core/followup.py)
+#            slot_fill -> answer -> respond                      (intent="question" - RAG Q&A, no plan attempted - app/rag/)
+#            verify -> answer -> respond                         (intent="both" - a plan AND a question in one turn)
+#            slot_fill -> weather -> END                         (intent="weather" or a weather follow-up - live forecast, no LLM)
 # app/core/orchestrator.py
 #
 # Phase 6 rewrite (docs/master_plan/AGENT_ARCHITECTURE.md §1, PROJECT_MASTER_PLAN.md
@@ -10,6 +13,7 @@
 # verify/repair/fallback loop that makes an invalid or failed LLM plan
 # degrade to a deterministic one instead of erroring out.
 import logging
+import re
 from datetime import date as date_cls, timedelta
 
 from langgraph.graph import StateGraph, END
@@ -35,12 +39,17 @@ from app.core.planner_shared import (
 )
 from app.core.react import ReActConfig, run_react
 from app.core.llm import get_llm
-from app.models.schemas import ItineraryDay, PlannerOutput, RepairedPlannerOutput
+from app.models.schemas import AnswerOutput, ItineraryDay, PlannerOutput, RepairedPlannerOutput
 from app.prompts import get_prompt
 from app.prompts._base import enforce_max_input_chars
 from app.prompts.repair_prompt import (
     REPAIR_FINALIZE_SYSTEM, REPAIR_SYSTEM_PROMPT, build_repair_failures_message,
 )
+from app.rag.retrieve import Passage, best_vector_score, retrieve as retrieve_passages
+from app.tools.geo_tool import resolve_place
+from app.tools.weather_tool import get_weather
+from app.utils.clock import today_local
+from typing import Optional
 from app.tools.registry import build_planning_tools
 from app.agents.planner_agent import _build_item_store, _fetch_cost_table, _fetch_outdoor_tags
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -500,6 +509,227 @@ def _budget_breakdown_text(state: TripState) -> str:
     return "\n".join(lines)
 
 
+_FORECAST_HORIZON_DAYS = 5   # OpenWeather's free /forecast covers ~5 days
+
+
+def _umbrella_advice(rain_probability: float) -> str:
+    if rain_probability >= 0.5:
+        return "Yes, take an umbrella."
+    if rain_probability >= 0.2:
+        return "Maybe - pack a compact umbrella just in case."
+    return "Probably not needed."
+
+
+def _weather_dates(state: TripState) -> list[str]:
+    today = today_local()
+    when = state.weather_when
+    if when == "today":
+        return [today.isoformat()]
+    if when == "tomorrow":
+        return [(today + timedelta(days=1)).isoformat()]
+    if when == "day_after_tomorrow":
+        return [(today + timedelta(days=2)).isoformat()]
+    if when == "trip_dates" or (when is None and state.trip_context):
+        window = (state.trip_context or {}).get("date_window") or {}
+        if window.get("dates"):
+            return list(window["dates"])
+    return [(today + timedelta(days=i)).isoformat() for i in range(3)]
+
+
+async def _weather_place(state: TripState) -> tuple[Optional[str], Optional[dict]]:
+    """(label, {lat, lon}) for this weather question, in order: the place
+    named in THIS message, the planned trip's destination, the traveller's
+    own location (GPS, else IP). (None, None) when there's nothing to go on."""
+    named = state.weather_place
+    if named:
+        # As typed ("colombo") - capitalised for display, lookup unaffected.
+        named = named if any(ch.isupper() for ch in named) else named.title()
+        try:
+            place = await resolve_place(named)
+        except Exception as e:
+            logger.warning(f"weather: could not resolve {named!r}: {e}")
+            place = None
+        return (named, {"lat": place["lat"], "lon": place["lon"]}) if place else (named, None)
+
+    ctx = state.trip_context or {}
+    if ctx.get("lat") is not None and ctx.get("lon") is not None:
+        return ctx.get("destination_name") or state.destination, {"lat": ctx["lat"], "lon": ctx["lon"]}
+    if state.destination:
+        try:
+            place = await resolve_place(state.destination)
+        except Exception:
+            place = None
+        if place:
+            return state.destination, {"lat": place["lat"], "lon": place["lon"]}
+
+    if state.start_location:
+        return "your location", {"lat": state.start_location["lat"], "lon": state.start_location["lon"]}
+    return None, None
+
+
+async def _weather_node(state: TripState) -> TripState:
+    """Live weather questions (intent="weather"): "will it rain tomorrow in
+    Colombo, should I take an umbrella?". Answered from OpenWeather via
+    get_weather - no LLM call, no plan built or changed. A trip's stored
+    forecast (_weather_text) is only the fallback when the live call fails."""
+    label, point = await _weather_place(state)
+    if point is None:
+        state.final_response = (
+            f"I couldn't find {label} - which place in Sri Lanka should I check?" if label
+            else "Which place should I check the weather for?"
+        )
+        state.completed_steps.append("weather")
+        return state
+
+    dates = _weather_dates(state)
+    horizon = (today_local() + timedelta(days=_FORECAST_HORIZON_DAYS - 1)).isoformat()
+    in_range = [d for d in dates if d <= horizon]
+
+    result = await get_weather(point["lat"], point["lon"], in_range) if in_range else None
+    forecast = (result or {}).get("forecast") or []
+
+    if not forecast:
+        if not in_range:
+            state.final_response = (
+                f"Those dates are too far ahead to forecast for {label} - the forecast only covers "
+                f"the next {_FORECAST_HORIZON_DAYS} days. Ask me again closer to the time."
+            )
+        elif (state.trip_context or {}).get("per_day_weather"):
+            state.final_response = _weather_text(state)
+        else:
+            state.final_response = "The weather service isn't available right now - please try again shortly."
+        state.completed_steps.append("weather")
+        return state
+
+    today = today_local()
+    names = {today.isoformat(): "Today", (today + timedelta(days=1)).isoformat(): "Tomorrow"}
+    lines = [f"Weather for {label}:"]
+    for day in forecast:
+        pct = round(float(day["rain_probability"]) * 100)
+        lines.append(
+            f"  {names.get(day['date'], day['date'])} ({day['date']}): {day['condition']}, "
+            f"{day['temp_min']:.0f}-{day['temp_max']:.0f}°C, {pct}% chance of rain - "
+            f"{_umbrella_advice(float(day['rain_probability']))}"
+        )
+    skipped = [d for d in dates if d > horizon]
+    if skipped:
+        lines.append(f"\n{', '.join(skipped)} are beyond the {_FORECAST_HORIZON_DAYS}-day forecast.")
+    state.final_response = "\n".join(lines)
+    state.completed_steps.append("weather")
+    return state
+
+
+def _weather_text(state: TripState) -> str:
+    """The forecast already stored with the trip, read straight off
+    trip_context - same rule as _budget_breakdown_text: no tool or LLM
+    call, so the answer matches the plan on screen. It is the forecast as
+    of when the trip was planned, and says so."""
+    forecast = (state.trip_context or {}).get("per_day_weather") or []
+    if not forecast:
+        return ("I don't have a weather forecast saved for this trip - it may be too far out "
+                "for the forecast service, or it was unavailable when the plan was made.")
+    lines = [f"Weather for {state.destination or 'your trip'} (forecast from when your plan was made):"]
+    for day in forecast:
+        pct = round(float(day.get("rain_probability") or 0.0) * 100)
+        lines.append(
+            f"  {day.get('date')}: {day.get('condition')}, "
+            f"{day.get('temp_min'):.0f}-{day.get('temp_max'):.0f}°C, {pct}% chance of rain"
+        )
+    rainy = [d["date"] for d in forecast if float(d.get("rain_probability") or 0.0) >= 0.5]
+    lines.append(f"\nLikely rainy: {', '.join(rainy)}." if rainy else "\nRain looks unlikely on these days.")
+    return "\n".join(lines)
+
+
+def _cited_passage_indices(answer_text: str, passage_count: int) -> list[int]:
+    """[N] markers in `answer_text`, deduped, in first-appearance order,
+    filtered to a real 1-based passage index - never trusts the model's
+    citation numbers blindly (a hallucinated [7] against 3 real passages
+    must not turn into an IndexError, or a citation to nothing).
+
+    Matches both a single citation ("[1]") and a grouped list the model
+    writes despite the prompt asking for one number per bracket
+    (live-observed 2026-09-30: "[1, 2, 4]") - handling that shape here is
+    more robust than trusting every model to follow the format instruction
+    exactly every time."""
+    seen: list[int] = []
+    for group in re.finditer(r"\[([\d,\s]+)\]", answer_text):
+        for raw in group.group(1).split(","):
+            raw = raw.strip()
+            if not raw.isdigit():
+                continue
+            n = int(raw)
+            if 1 <= n <= passage_count and n not in seen:
+                seen.append(n)
+    return seen
+
+
+def _source_dict(passage: Passage) -> dict:
+    return {"title": passage.title, "url": passage.url, "section": passage.section, "license": passage.license}
+
+
+async def _answer_node(state: TripState) -> TripState:
+    """RAG Q&A (app/rag/) - reached for intent "question" (routed straight
+    here from slot_fill, no plan ever attempted) or "both" (routed here
+    from _route_after_verify, once a real plan already exists). Retrieval
+    is deterministic; the one LLM call is grounded strictly in what it
+    returned. Never raises: a knowledge-base problem degrades to a plain
+    "I don't know" rather than failing the whole turn - on a "both" turn
+    there's a real plan riding on this same response."""
+    question = state.question or state.user_input
+
+    # A "both" turn already resolved a district via orchestrate; a bare
+    # "question" turn never ran orchestrate at all, so try the destination
+    # directly if one was named ("is Kandy safe at night?"). Neither
+    # existing is fine too - retrieve() with district_id=None searches
+    # every district plus national-level content, which is the right
+    # default for a general question ("do I need a visa?").
+    district_id = (state.trip_context or {}).get("district_id")
+    if district_id is None and state.destination:
+        try:
+            place = await resolve_place(state.destination)
+            district_id = place.get("district_id") if place else None
+        except Exception as e:
+            logger.warning(f"answer: destination resolution failed, searching all districts: {e}")
+
+    try:
+        passages = await retrieve_passages(question, district_id=district_id)
+    except Exception as e:
+        logger.warning(f"answer: retrieval failed: {e}")
+        passages = []
+
+    top_score = best_vector_score(passages)
+    if not passages or (top_score is not None and top_score < settings.rag_min_score):
+        # No passages, or the best one isn't a confident match - answering
+        # anyway would mean paraphrasing weak/irrelevant material into
+        # something that reads more authoritative than it is.
+        state.answer = "I don't have reliable information on that."
+        state.completed_steps.append("answer")
+        return state
+
+    numbered = "\n\n".join(
+        f"[{i}] {p.title}" + (f" — {p.section}" if p.section else "") + f":\n{p.content}"
+        for i, p in enumerate(passages, start=1)
+    )
+    prompt = get_prompt("answer")
+    human = enforce_max_input_chars(prompt, f"Question: {question}\n\nPassages:\n{numbered}")
+
+    try:
+        structured_llm = get_llm("answer").with_structured_output(prompt.output_schema)
+        result: AnswerOutput = await structured_llm.ainvoke([("system", prompt.system), ("human", human)])
+        answer_text = result.answer
+    except Exception as e:
+        # Deterministic fallback: the strongest single passage, verbatim,
+        # with its own citation - degrades quality, never availability.
+        logger.warning(f"answer: LLM call failed, falling back to the top passage verbatim: {e}")
+        answer_text = f"{passages[0].content} [1]"
+
+    cited = _cited_passage_indices(answer_text, len(passages))
+    state.answer = answer_text
+    state.sources = [_source_dict(passages[i - 1]) for i in cited] or [_source_dict(passages[0])]
+    state.completed_steps.append("answer")
+    return state
+
+
 async def _respond_node(state: TripState) -> TripState:
 
     if state.clarification_needed:
@@ -525,6 +755,17 @@ async def _respond_node(state: TripState) -> TripState:
     hard_errors = [e for e in state.errors if not e.startswith(_SOFT_ERROR_PREFIXES)]
     soft_notes = [e for e in state.errors if e.startswith(_SOFT_ERROR_PREFIXES)]
 
+    if state.intent == "question" and state.followup_scope != "informational":
+        # (An informational follow-up - budget/weather about the existing
+        # plan - is also tagged intent="question" by the slot-filling LLM,
+        # but is answered from state below, not by the RAG answer node.)
+        # A pure question never builds a plan - has_real_content below is
+        # always False for it, which would otherwise read as "the planner
+        # failed" and ask "which destination?" instead of answering.
+        state.final_response = state.answer or "I don't have reliable information on that."
+        state.completed_steps.append("respond")
+        return state
+
     # A day entry with an empty items list is not a plan - live-found
     # 2026-09-06: a follow-up that lost its destination mid-conversation
     # produced itinerary=[{"day": 1, "items": [], "day_cost": 0.0}] with no
@@ -545,7 +786,9 @@ async def _respond_node(state: TripState) -> TripState:
                 "Could you try adjusting the destination, dates, or budget?"
             )
     elif state.followup_scope == "informational":
-        state.final_response = _budget_breakdown_text(state)
+        state.final_response = (
+            _weather_text(state) if state.followup_info == "weather" else _budget_breakdown_text(state)
+        )
     else:
         state.final_response = (
             f"Here's your trip plan for {state.destination or 'your destination'}: "
@@ -556,8 +799,21 @@ async def _respond_node(state: TripState) -> TripState:
             state.final_response += f" (plan_source: {state.plan_source})"
         if state.budget_notes:
             state.final_response += f"\n\nBudget note: {state.budget_notes}"
-        if soft_notes:
-            state.final_response += "\n\nNote: " + "; ".join(soft_notes)
+        # Only notes a traveller can act on reach the reply. How the plan was
+        # assembled (planner_day_assembly, llm_plan_rejected, fallback_reason,
+        # hallucinated-drop) is a developer diagnostic - still in `errors`
+        # and the API response, just not in the chat bubble.
+        traveller_notes = [
+            n for n in soft_notes if n.startswith(("location_unresolved", "profile_unavailable", "safety_note"))
+        ]
+        if traveller_notes:
+            state.final_response += "\n\nNote: " + "; ".join(traveller_notes)
+
+    # intent="both" ("plan Kandy, and any scams to watch out for?") owes
+    # the question half too, regardless of which branch above ran - even a
+    # failed plan attempt still leaves a real question to answer.
+    if state.intent == "both" and state.answer:
+        state.final_response += f"\n\n{state.answer}"
 
     state.completed_steps.append("respond")
     return state
@@ -574,12 +830,28 @@ def _route_after_policy(state: TripState) -> str:
 def _route_after_slot_fill(state: TripState) -> str:
     if state.clarification_needed:
         return "respond"
+    # Weather questions - a fresh one ("will it rain tomorrow in Colombo?")
+    # or a follow-up about the planned trip ("will it rain on those days?")
+    # - are answered from the live forecast, never by re-planning.
+    if state.intent == "weather" or (
+        state.is_followup and state.followup_scope == "informational" and state.followup_info == "weather"
+    ):
+        return "weather"
     # A question about the existing plan is answered from the plan itself.
     # Routing it anywhere else rebuilds the itinerary, which is how "show
     # budget breakdown" used to come back with different stops and a
     # different total - and burned a full planning cycle to do it.
     if state.is_followup and state.followup_scope == "informational" and state.itinerary:
         return "respond"
+    # A PURE travel question ("do I need a visa?") never builds or changes
+    # a plan - routing it into orchestrate/recommend/plan would burn a full
+    # planning cycle to answer something that doesn't need one, the exact
+    # mistake the informational-followup case above already exists to
+    # avoid. "both" ("plan Kandy AND is tap water safe?") still needs a
+    # real plan, so it falls through to the normal pipeline below and gets
+    # its answer appended later - see _route_after_verify.
+    if state.intent == "question":
+        return "answer"
     if state.is_followup and state.followup_scope == "shape_only":
         return "targeted_replan"
     return "orchestrate"
@@ -599,7 +871,14 @@ def _route_after_recommend(state: TripState) -> str:
 
 def _route_after_verify(state: TripState) -> str:
     if not state.validation_failures:
-        return "respond"
+        # intent="both" ("plan 2 days in Kandy, and are there scams to
+        # watch out for?") still owes an answer to the question half, once
+        # the plan half is done - whichever path got here (a clean LLM
+        # plan, a repaired one, or fallback's deterministic build, which
+        # also routes through this same edge). "question"-only never
+        # reaches this node at all (routed straight to "answer" from
+        # slot_fill), and "plan" has nothing for _answer_node to do.
+        return "answer" if state.intent == "both" else "respond"
     # No-progress guard (2026-09-26): a repair that reproduces the EXACT
     # same failure set as the attempt right before it didn't fix anything -
     # most often a systematic failure (e.g. the plan_source literal finding
@@ -628,6 +907,8 @@ def build_orchestrator_graph():
     graph.add_node("verify", _verify_node)
     graph.add_node("repair", _repair_node)
     graph.add_node("fallback", _fallback_node)
+    graph.add_node("answer", _answer_node)
+    graph.add_node("weather", _weather_node)
     graph.add_node("respond", _respond_node)
 
     graph.set_entry_point("validate")
@@ -641,6 +922,8 @@ def build_orchestrator_graph():
     graph.add_conditional_edges("recommend", _route_after_recommend)
     graph.add_edge("plan", "verify")
     graph.add_conditional_edges("verify", _route_after_verify)
+    graph.add_edge("answer", "respond")
+    graph.add_edge("weather", END)
     graph.add_edge("repair", "verify")
     graph.add_edge("fallback", "verify")
     graph.add_edge("respond", END)

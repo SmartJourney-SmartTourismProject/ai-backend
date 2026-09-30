@@ -92,3 +92,19 @@ class TestBudgetBreakdownText:
 
         text = _budget_breakdown_text(self._state())
         assert "no price data" in text
+
+
+class TestWeatherQuestions:
+    def test_rain_question_is_informational_weather(self):
+        plan = classify_followup("will it rain on those days?", EMPTY)
+        assert plan.scope == "informational" and plan.info_kind == "weather"
+
+    def test_train_is_not_a_weather_question(self):
+        # "rain" is a substring of "train" - must be whole-word matched.
+        assert classify_followup("how do I get there by train?", EMPTY).info_kind != "weather"
+
+    def test_budget_questions_stay_budget(self):
+        assert classify_followup("show budget breakdown", EMPTY).info_kind == "budget"
+
+    def test_weather_plus_instruction_still_replans(self):
+        assert classify_followup("will it rain, and make it cheaper", EMPTY).scope == "shape_only"

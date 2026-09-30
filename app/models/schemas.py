@@ -119,6 +119,38 @@ class ExtractedSlots(BaseModel):
             "number instead (use items_per_day for that)."
         ),
     )
+    # RAG Q&A (app/rag/, app/core/orchestrator.py's _answer_node). Decided
+    # in the same call as every other slot rather than a second LLM call -
+    # the model already reads the whole message here.
+    intent: Literal["plan", "question", "both", "weather"] = Field(
+        "plan", description=(
+            "'question' if the message ONLY asks something about Sri Lanka travel "
+            "(visas, safety, customs, transport, costs, etiquette) with no request "
+            "to build or change a trip plan - e.g. 'do I need a visa?', 'is tap "
+            "water safe?', 'what should I wear at a temple?'. 'both' if it asks a "
+            "question AND requests/changes a plan in the same message - e.g. 'plan "
+            "2 days in Kandy, and are there scams to watch out for?'. 'plan' "
+            "(the default) for everything else, including a plain trip request "
+            "with no question attached. 'weather' if the message asks about the "
+            "weather/forecast/rain/umbrella for a day or place, with no request to "
+            "build or change a plan - e.g. 'will it rain tomorrow in Colombo?', "
+            "'should I take an umbrella today?', 'what's the weather on my trip?'."
+        ),
+    )
+    weather_when: Optional[Literal["today", "tomorrow", "day_after_tomorrow", "trip_dates", "next_days"]] = Field(
+        None, description=(
+            "Only when intent is 'weather': which day(s) the traveler asked about. "
+            "'today', 'tomorrow', 'day_after_tomorrow'; 'trip_dates' if they mean "
+            "their planned trip ('on those days', 'during my trip'); otherwise "
+            "'next_days'. Null when intent is not 'weather'."
+        ),
+    )
+    question: Optional[str] = Field(
+        None, description=(
+            "The traveler's question verbatim (or lightly cleaned up), only when "
+            "intent is 'question' or 'both'. Null when intent is 'plan'."
+        ),
+    )
 
 
 # ─────────────────────────── orchestrator (Phase 6 target) ─────────────────
@@ -271,3 +303,27 @@ class RepairedPlannerOutput(PlannerOutput):
     """Identical shape to PlannerOutput - the repair call returns the same
     schema, just with L0-L2's failures corrected. A distinct class only so
     call sites are explicit about which pass produced a given object."""
+
+
+# ─────────────────────────── RAG answer (app/rag/) ───────────────────────
+
+
+class AnswerOutput(BaseModel):
+    """app/prompts/answer_prompt.py's structured output. Deliberately just
+    the prose, not a separate structured citation list too - a second field
+    the model fills in by hand can disagree with what it actually wrote.
+    app/core/orchestrator.py's `_answer_node` parses the [N] markers back
+    out of `answer` itself and validates each N against the real passage
+    count, which is the single source of truth for what was actually
+    cited."""
+
+    answer: str = Field(
+        ..., max_length=1500,
+        description=(
+            "The answer, grounded ONLY in the numbered passages given - cite each fact "
+            "inline with the passage's number in square brackets, e.g. 'Both shoulders "
+            "and knees should be covered [1].' Every non-obvious claim needs a citation. "
+            "If the passages don't actually answer the question, say so plainly instead "
+            "of guessing."
+        ),
+    )

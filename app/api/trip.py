@@ -79,6 +79,13 @@ class TripPlanResponse(BaseModel):
     # origin is never a stop, and the map had nothing else to plot.
     start_location: Optional[dict] = None
     final_response: Optional[str] = None
+    # RAG Q&A citations (app/rag/, app/core/orchestrator.py's _answer_node) -
+    # [{"title", "url", "section", "license"}] for whatever _answer_node
+    # actually cited. Empty unless this turn's intent was "question" or
+    # "both"; final_response already reads fine on its own (the answer
+    # text includes inline [N] markers), this is what the client turns
+    # into clickable source links under it.
+    sources: list[dict] = []
     errors: list[str] = []
     # Debug-only, per §7 - never populated unless settings.debug=True.
     # Renamed from completed_steps (Phase 7): now carries both the step
@@ -170,6 +177,7 @@ async def create_trip_plan(payload: TripPlanRequest, request: Request):
         disaster=result.get("disaster"),
         start_location=result.get("start_location"),
         final_response=result.get("final_response"),
+        sources=result.get("sources", []),
         errors=result.get("errors", []),
         trace=trace,
     )
