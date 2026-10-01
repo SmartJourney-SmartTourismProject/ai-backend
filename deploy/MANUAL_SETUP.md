@@ -30,9 +30,9 @@ Set as **organization** secrets (full guide §6) and give **this repo** access:
 
 | Secret | Used for |
 |---|---|
-| `LIGHTSAIL_HOST` | The server's static IP |
-| `LIGHTSAIL_USER` | `deploy` |
-| `LIGHTSAIL_SSH_KEY` | The CD private key (`smartjourney_deploy`) |
+| `SERVER_HOST` | The server's static IP |
+| `SERVER_USER` | `deploy` |
+| `SERVER_SSH_KEY` | The CD private key (`smartjourney_deploy`) |
 
 GHCR login uses the built-in `GITHUB_TOKEN`. Also check **Org → Settings → Actions → Workflow permissions = Read and write**.
 

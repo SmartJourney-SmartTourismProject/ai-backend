@@ -64,17 +64,17 @@ jobs:
       group: production
       cancel-in-progress: false
     env:
-      LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
-      LIGHTSAIL_USER: ${{ secrets.LIGHTSAIL_USER }}
-      SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      SERVER_USER: ${{ secrets.SERVER_USER }}
+      SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
     steps:
       # Until the server exists and the secrets are added (see
       # deploy/MANUAL_SETUP.md) this job skips cleanly instead of failing.
       - name: Check deploy secrets
         id: gate
         run: |
-          if [ -z "$LIGHTSAIL_HOST" ] || [ -z "$LIGHTSAIL_USER" ] || [ -z "$SSH_KEY" ]; then
-            echo "::notice::Deploy skipped: LIGHTSAIL_HOST / LIGHTSAIL_USER / LIGHTSAIL_SSH_KEY are not configured."
+          if [ -z "$SERVER_HOST" ] || [ -z "$SERVER_USER" ] || [ -z "$SSH_KEY" ]; then
+            echo "::notice::Deploy skipped: SERVER_HOST / SERVER_USER / SERVER_SSH_KEY are not configured."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
@@ -85,11 +85,11 @@ jobs:
           install -d -m 700 ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$LIGHTSAIL_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts
       # deploy.sh (copied to the server by the backend pipeline) pulls the new
       # image, restarts the container, waits for its healthcheck and rolls back
       # to the previous tag if it never becomes healthy.
       - name: Deploy ai-backend
         if: steps.gate.outputs.enabled == 'true'
         run: |
-          ssh -i ~/.ssh/deploy_key "$LIGHTSAIL_USER@$LIGHTSAIL_HOST" "cd /opt/smartjourney && ./deploy.sh ai-backend ${{ github.sha }}"
+          ssh -i ~/.ssh/deploy_key "$SERVER_USER@$SERVER_HOST" "cd /opt/smartjourney && ./deploy.sh ai-backend ${{ github.sha }}"
