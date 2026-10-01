@@ -28,11 +28,14 @@ import logging
 from functools import lru_cache
 from typing import Any, Literal, Optional
 
+from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 
 from app.config.settings import settings
+from app.core import llm_config
 
 logger = logging.getLogger(__name__)
 
@@ -96,12 +99,15 @@ def log_token_usage(purpose: str, ai_message: Any) -> None:
 
 
 def _has_key_for(spec: str) -> bool:
-    provider = spec.split(":", 1)[0]
-    if provider == "gemini":
-        return bool(settings.gemini_api_key)
-    if provider == "groq":
-        return bool(settings.groq_api_key)
-    return False
+    # Keys come from llm_config: one an admin saved (Admin > AI models), else .env.
+    return bool(llm_config.key_for(spec.split(":", 1)[0]))
+
+
+# Claude models that always think and reject sampling parameters
+# (temperature/top_p/top_k -> 400). Haiku 4.5 is the exception: no thinking
+# unless asked, and the sampling params are accepted.
+def _claude_takes_sampling(model: str) -> bool:
+    return model.startswith("claude-haiku")
 
 
 def _build(spec: str, purpose: Purpose, temperature: Optional[float]) -> BaseChatModel:
@@ -129,7 +135,7 @@ def _build(spec: str, purpose: Purpose, temperature: Optional[float]) -> BaseCha
             thinking["thinking_budget"] = _GEMINI_THINKING_BUDGET[purpose]
         return ChatGoogleGenerativeAI(
             model=model,
-            google_api_key=settings.gemini_api_key,
+            google_api_key=llm_config.key_for("gemini"),
             temperature=real_temperature,
             top_p=settings.llm_top_p,
             top_k=settings.llm_top_k,
@@ -141,11 +147,40 @@ def _build(spec: str, purpose: Purpose, temperature: Optional[float]) -> BaseCha
     if provider == "groq":
         return ChatGroq(
             model_name=model,
-            groq_api_key=settings.groq_api_key,
+            groq_api_key=llm_config.key_for("groq"),
             temperature=real_temperature,
             max_tokens=max_tokens,
             request_timeout=settings.llm_timeout_s,
             max_retries=0,
+        )
+    if provider == "openai":
+        return ChatOpenAI(
+            model=model,
+            api_key=llm_config.key_for("openai"),
+            temperature=real_temperature,
+            max_tokens=max_tokens,
+            timeout=settings.llm_timeout_s,
+            max_retries=0,
+        )
+    if provider == "anthropic":
+        kwargs: dict[str, Any] = {}
+        if _claude_takes_sampling(model):
+            kwargs["temperature"] = real_temperature
+        else:
+            # Sonnet 5.5 / Opus 5.5 think on every call, and that reasoning
+            # counts against max_tokens - the small slots/respond budgets would
+            # leave nothing for the answer (same failure as Gemini thinking,
+            # see _GEMINI_THINKING_BUDGET). More room, and low effort, since
+            # these calls extract or phrase rather than reason.
+            max_tokens = max(max_tokens * 4, 4096)
+            kwargs["output_config"] = {"effort": "low"}
+        return ChatAnthropic(
+            model=model,
+            anthropic_api_key=llm_config.key_for("anthropic"),
+            max_tokens=max_tokens,
+            default_request_timeout=settings.llm_timeout_s,
+            max_retries=0,
+            **kwargs,
         )
     raise ValueError(f"unknown LLM provider in chain: '{provider}' (from spec '{spec}')")
 
@@ -161,7 +196,7 @@ def get_llm(purpose: Purpose, temperature: Optional[float] = None) -> BaseChatMo
     constructing a chat model is cheap but there is no reason to redo it per
     call; maxsize raised from 16 since a repair attempt now asks for a
     handful of distinct temperatures per purpose on top of the default."""
-    specs = [s.strip() for s in settings.llm_provider_chain.split(",") if s.strip()]
+    specs = list(llm_config.chain())
 
     if purpose in _groq_first_purposes():
         # History (settings.py's own comment has the full story):
@@ -180,10 +215,16 @@ def get_llm(purpose: Purpose, temperature: Optional[float] = None) -> BaseChatMo
     usable = [s for s in specs if _has_key_for(s)]
     if not usable:
         raise RuntimeError(
-            "No LLM provider has a configured API key. Set GEMINI_API_KEY "
-            "(required) and optionally GROQ_API_KEY for failover - see "
+            "No model in the LLM provider chain has an API key. Add one in "
+            "Admin > AI models, or set GEMINI_API_KEY / GROQ_API_KEY / "
+            "OPENAI_API_KEY / ANTHROPIC_API_KEY in .env - see "
             "docs/master_plan/API_SETUP.md."
         )
 
     primary, *rest = (_build(s, purpose, temperature) for s in usable)
     return primary.with_fallbacks(rest) if rest else primary
+
+
+# An admin changing the chain or a key (Admin > AI models) must reach the
+# next call, not wait for a restart - drop every cached client.
+llm_config.on_change(get_llm.cache_clear)

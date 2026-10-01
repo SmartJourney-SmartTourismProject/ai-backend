@@ -31,6 +31,19 @@ class Settings(BaseSettings):
         "gemini:gemini-3.5-flash-lite,gemini:gemini-3.6-flash,groq:openai/gpt-oss-120b"
     )
     groq_api_key: str = ""
+    # Optional paid providers, selectable in Admin > AI models
+    # (app/core/llm_config.py). Keys entered in the admin panel override these.
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    # AES-256-GCM key (32 bytes, base64) that decrypts API keys an admin saved
+    # in the DB (llm_provider_key). Must match backend/.env's value.
+    settings_encryption_key: str = ""
+    # Shared secret NestJS sends as X-Internal-Token to /internal/llm/*.
+    # Empty = those routes are disabled.
+    internal_api_token: str = ""
+    # How often the LLM config is re-read from the DB (an admin save also
+    # triggers an immediate reload via /internal/llm/reload).
+    llm_config_refresh_s: float = 30.0
 
     # Purposes to try in Groq-first order (app/core/llm.py's get_llm()) -
     # empty by default as of the itinerary-quality/token-reduction pass.

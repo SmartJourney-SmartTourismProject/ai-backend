@@ -199,9 +199,15 @@ async def resolve_trip_context(state: TripState) -> None:
             # on an empty plan (live-found 2026-10-01, "galle and matara"
             # before multi-place support). The graph routes straight to
             # respond on this - see _route_after_orchestrate.
+            # No destination at all (slot filling failed - e.g. every LLM in the
+            # chain rate-limited - on a follow-up turn) used to print the
+            # literal "None" here: 'I couldn't find "None" in Sri Lanka'.
             state.clarification_needed = (
                 f"I couldn't find \"{state.destination}\" in Sri Lanka. Which town or district "
                 "should I plan around? You can name more than one, e.g. \"Galle and Matara\"."
+                if state.destination
+                else "Which destination would you like to visit? You can name more than one, "
+                "e.g. \"Galle and Matara\"."
             )
             return
 

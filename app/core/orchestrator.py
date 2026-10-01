@@ -754,7 +754,9 @@ async def _answer_node(state: TripState) -> TripState:
     human = enforce_max_input_chars(prompt, f"Question: {question}\n\nPassages:\n{numbered}")
 
     try:
-        structured_llm = get_llm("answer").with_structured_output(prompt.output_schema)
+        # json_schema, as in react.py: the default (forced tool call) is rejected
+        # by Claude Sonnet/Opus 5.5 when an admin puts one in the chain.
+        structured_llm = get_llm("answer").with_structured_output(prompt.output_schema, method="json_schema")
         result: AnswerOutput = await structured_llm.ainvoke([("system", prompt.system), ("human", human)])
         answer_text = result.answer
     except Exception as e:

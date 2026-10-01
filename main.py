@@ -38,6 +38,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.trip import router as trip_router
 from app.api.google_oauth import router as google_oauth_router
+from app.api.admin_llm import router as admin_llm_router
+from app.core import llm_config
 from app.scheduler import start_scheduler, stop_scheduler
 from app.utils.db_pool import close_pool
 from app.data import pipeline
@@ -61,6 +63,7 @@ app.add_middleware(
 
 app.include_router(trip_router)
 app.include_router(google_oauth_router)
+app.include_router(admin_llm_router)
 
 
 # ------------------- API Endpoints -------------------
@@ -120,6 +123,9 @@ async def startup_event():
     """Start the automated data-refresh scheduler on startup."""
     logger.info("Starting SmartJourney AI Backend...")
     start_scheduler()
+    # Admin-chosen models/keys (Admin > AI models), re-read periodically.
+    await llm_config.reload()
+    llm_config.start_refresh()
     logger.info("Ready to serve requests")
 
 
@@ -127,6 +133,7 @@ async def startup_event():
 async def shutdown_event():
     """Stop the background scheduler and release the DB pool cleanly."""
     stop_scheduler()
+    llm_config.stop_refresh()
     await close_pool()
 
 
