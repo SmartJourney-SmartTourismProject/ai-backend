@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # No database, Redis, or external API keys - tests/conftest.py fakes the
 # cache, weather/disaster feeds, calendar and session store, and
@@ -26,3 +27,69 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python -m pytest -m "not external" -q
+
+  # ---- CD: only on main, only after the tests pass --------------------------
+  build:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io/smartjourney-smarttourismproject
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/ai-backend:${{ github.sha }}
+            ${{ env.REGISTRY }}/ai-backend:latest
+          cache-from: type=gha,scope=ai-backend
+          cache-to: type=gha,scope=ai-backend,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # One production deploy at a time, across every repo's pipeline.
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    env:
+      LIGHTSAIL_HOST: ${{ secrets.LIGHTSAIL_HOST }}
+      LIGHTSAIL_USER: ${{ secrets.LIGHTSAIL_USER }}
+      SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+    steps:
+      # Until the server exists and the secrets are added (see
+      # deploy/MANUAL_SETUP.md) this job skips cleanly instead of failing.
+      - name: Check deploy secrets
+        id: gate
+        run: |
+          if [ -z "$LIGHTSAIL_HOST" ] || [ -z "$LIGHTSAIL_USER" ] || [ -z "$SSH_KEY" ]; then
+            echo "::notice::Deploy skipped: LIGHTSAIL_HOST / LIGHTSAIL_USER / LIGHTSAIL_SSH_KEY are not configured."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up SSH
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          install -d -m 700 ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$LIGHTSAIL_HOST" >> ~/.ssh/known_hosts
+      # deploy.sh (copied to the server by the backend pipeline) pulls the new
+      # image, restarts the container, waits for its healthcheck and rolls back
+      # to the previous tag if it never becomes healthy.
+      - name: Deploy ai-backend
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          ssh -i ~/.ssh/deploy_key "$LIGHTSAIL_USER@$LIGHTSAIL_HOST" "cd /opt/smartjourney && ./deploy.sh ai-backend ${{ github.sha }}"

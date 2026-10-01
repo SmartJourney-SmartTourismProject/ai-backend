@@ -41,8 +41,7 @@ Fill these in `/opt/smartjourney/.env` (full guide §4). Copy the provider keys 
 
 | Variable | Production value |
 |---|---|
-| `DATABASE_URL` | `postgresql://smartjourney:<POSTGRES_PASSWORD>@db:5432/smartjourney` |
-| `REDIS_URL` | `redis://redis:6379/0` |
+| `DATABASE_URL`, `REDIS_URL` | **Built for you by `compose.prod.yml`** from `POSTGRES_*`; don't set them |
 | `SETTINGS_ENCRYPTION_KEY` | **New** value (`openssl rand -base64 32`). Must match NestJS (same `.env` file). |
 | `INTERNAL_API_TOKEN` | **New** random value. NestJS sends it to `/internal/llm/*`. |
 | `LLM_PROVIDER_CHAIN` | e.g. `gemini:gemini-3.5-flash-lite,gemini:gemini-3.6-flash,anthropic:claude-haiku-4-5,groq:openai/gpt-oss-120b`. This is the fallback; **Admin → AI models** overrides it at runtime. |
@@ -64,7 +63,7 @@ Gemini's free daily quota runs out quickly, so Claude Haiku 4.5 is the reliable 
 - **If Explore shows no places**, listings aren't verified yet. On the server:
   ```bash
   cd /opt/smartjourney
-  docker compose -f compose.prod.yml exec ai-backend python -m app.data.verify_all_for_demo
+  ./compose.sh exec ai-backend python -m app.data.verify_all_for_demo
   ```
 - **Check models:** **Admin → AI models → Test models.** Expect Working, or "Out of quota" for Gemini late in the day.
 
@@ -73,10 +72,10 @@ Gemini's free daily quota runs out quickly, so Claude Haiku 4.5 is the reliable 
 | Task | How |
 |---|---|
 | Deploy a change | Merge to `main`. CI tests, builds and deploys automatically. |
-| See logs | `ssh deploy@<ip>`, then `cd /opt/smartjourney && docker compose -f compose.prod.yml logs -f --tail 200 ai-backend` |
+| See logs | `ssh deploy@<ip>`, then `cd /opt/smartjourney && ./compose.sh logs -f --tail 200 ai-backend` |
 | Roll back by hand | `./deploy.sh ai-backend <older-commit-sha>` on the server (any SHA that CI built) |
-| Restart | `docker compose -f compose.prod.yml restart ai-backend` |
-| Change a key or model order | **Admin → AI models** (no restart), or edit `.env` and then `docker compose -f compose.prod.yml up -d ai-backend` |
+| Restart | `./compose.sh restart ai-backend` |
+| Change a key or model order | **Admin → AI models** (no restart), or edit `.env` and then `./compose.sh up -d ai-backend` |
 
 ## Troubleshooting
 
