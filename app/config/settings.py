@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # Shared secret NestJS sends as X-Internal-Token to /internal/llm/*.
     # Empty = those routes are disabled.
     internal_api_token: str = ""
+    # Comma-separated browser origins allowed by CORS. NestJS calls this
+    # service server-to-server (no CORS involved), so this only matters for
+    # direct browser access such as Swagger or a local frontend.
+    cors_allowed_origins: str = "http://localhost:3000,http://localhost:3001,http://localhost:8000"
     # How often the LLM config is re-read from the DB (an admin save also
     # triggers an immediate reload via /internal/llm/reload).
     llm_config_refresh_s: float = 30.0

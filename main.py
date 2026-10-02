@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 # would otherwise fail at runtime even with a correctly filled-in .env.
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.trip import router as trip_router
@@ -43,6 +43,8 @@ from app.core import llm_config
 from app.scheduler import start_scheduler, stop_scheduler
 from app.utils.db_pool import close_pool
 from app.data import pipeline
+from app.config.settings import settings
+from app.utils.internal_auth import require_internal_token
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,13 +57,13 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(trip_router)
+app.include_router(trip_router, dependencies=[Depends(require_internal_token)])
 app.include_router(google_oauth_router)
 app.include_router(admin_llm_router)
 
@@ -96,7 +98,7 @@ def _run_pipeline_in_background(source: str) -> None:
     asyncio.get_running_loop().run_in_executor(None, pipeline.run_sync, source)
 
 
-@app.post("/api/admin/sync/events")
+@app.post("/api/admin/sync/events", dependencies=[Depends(require_internal_token)])
 async def trigger_events_sync():
     """
     Manually trigger the Ticketmaster events sync (all districts).
@@ -107,7 +109,7 @@ async def trigger_events_sync():
     return {"status": "started", "message": "Events sync started in the background."}
 
 
-@app.post("/api/admin/sync/listings")
+@app.post("/api/admin/sync/listings", dependencies=[Depends(require_internal_token)])
 async def trigger_listings_sync():
     """
     Manually trigger the OSM hotels/restaurants/attractions sync (all districts).
