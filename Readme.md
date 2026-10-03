@@ -49,6 +49,9 @@ UI are separate repositories.
    | `DATABASE_URL` | Real listings/user/profile data (required for `/trip-plan` — left blank, every DB-backed lookup fails loudly with `DataUnavailable` rather than falling back to mock data; the Phase 3 Kandy/Ella/Colombo/Galle mock-data fallback was removed). Points at the same database the NestJS backend owns; start it with `docker compose up -d` in `backend/`. |
    | `GOOGLE_CALENDAR_CLIENT_ID` / `_SECRET` | Google Calendar OAuth (optional — calendar features fall back to "no calendar connected") |
    | `REDIS_URL` | Weather/disaster caching (optional — cache fails open, always a live fetch without it) |
+   | `GROQ_API_KEY` | Second LLM provider in the failover chain (`LLM_PROVIDER_CHAIN`, optional) |
+   | `INTERNAL_API_TOKEN` | Shared secret NestJS sends as `X-Internal-Token`. Must equal the same variable in `backend/.env`. Blank = routes stay open (fine locally, **set it in any deployed environment**) |
+   | `SETTINGS_ENCRYPTION_KEY` | Decrypts API keys saved in Admin > AI models. Must equal the same variable in `backend/.env` |
 
    Everything else in `.env.example` is optional; the app runs and degrades gracefully without it.
    No key at all is needed for `GEMINI_API_KEY` to run tests — only for actually calling the API.
@@ -85,11 +88,14 @@ python -m uvicorn main:app --port 8001
 ## Running the tests
 
 ```powershell
-pytest
+python -m pytest -m "not external" -q
 ```
 
-456 tests, no network calls, no API keys needed, runs in about a minute. All external services
-(Gemini, OpenWeather, EONET/USGS/GDACS, PostgreSQL, Google Calendar, Nominatim) are mocked.
+826 tests (2026-10-03), no network calls, no API keys needed, about two minutes. All external
+services (Gemini, Groq, OpenWeather, EONET/USGS/GDACS, PostgreSQL, Google Calendar, Nominatim) are
+mocked. Tests marked `external` need real API keys and quota and are skipped in CI.
+
+Against a running full stack, `python scripts/e2e_check.py` runs the golden end-to-end scenarios.
 
 ---
 
@@ -109,7 +115,7 @@ modification in action.
 
 ### Example prompts to try
 
-Matched to the built-in mock data, so they'll produce a real itinerary:
+These need the database loaded (see the Local Setup Guide in the Documentation repo):
 
 - `Plan a 3-day trip to Kandy, budget $300, interested in culture and history`
 - `Plan a 2-day trip to Ella, budget $200, I love hiking and nature`
@@ -126,9 +132,6 @@ Follow-ups (send after any of the above completes):
 - `Actually make the budget $600 instead`
 - `Swap the temple visit for something more relaxing`
 
-A deliberately unmatched combo, to see graceful failure rather than a fake result:
-- `Plan a 2-day trip to Kandy, budget $300, love hiking` — Kandy's mock data has no "hiking" tag
-  (only Ella does), so this correctly reports "no verified listings found" instead of hallucinating one.
 
 ### Common gotcha: Gemini's free-tier daily quota
 
@@ -141,6 +144,9 @@ automated testing) rely on the mocked test suite instead of live calls.
 
 ## Documentation
 
+- **User manuals, admin manual and local setup guide:** the `Documentation` repo, `User Manual/` folder
+- [`deploy/MANUAL_SETUP.md`](deploy/MANUAL_SETUP.md) — this service's part of the production deployment (AWS EC2)
+- [`docs/master_plan/PROJECT_MASTER_PLAN.md`](docs/master_plan/PROJECT_MASTER_PLAN.md) — architecture decisions (D1–D16)
 - [`docs/AI_BACKEND_OPTIMIZATION_PLAN.md`](docs/AI_BACKEND_OPTIMIZATION_PLAN.md) — feature triage, deletions, and the token-ceiling fixes
 - [`docs/build_plan/BUILD_PLAN.md`](docs/build_plan/BUILD_PLAN.md) — the original architecture/contract plan
 - [`docs/build_plan/NEXT_STEPS.md`](docs/build_plan/NEXT_STEPS.md) — current status and what's left to do

@@ -1,13 +1,13 @@
 # AI backend: manual production setup
 
-This repo's part of the SmartJourney production deployment. The **full step-by-step guide** (AWS account, Lightsail server, Keycloak, data load, backups, decommission) lives in the backend repo:
+This repo's part of the SmartJourney production deployment. The **full step-by-step guide** (AWS account, EC2 server, Keycloak, data load, backups, decommission) lives in the backend repo:
 **[`backend/deploy/MANUAL_SETUP.md`](https://github.com/SmartJourney-SmartTourismProject/backend/blob/main/deploy/MANUAL_SETUP.md)**. Do that one first. This page covers only what's specific to the AI backend.
 
 ## How it's deployed
 
 | | |
 |---|---|
-| Where | A container (`ai-backend`) on the shared Lightsail 4 GB instance, Mumbai |
+| Where | A container (`ai-backend`) on the shared AWS EC2 instance (4 GB), Mumbai |
 | Image | `ghcr.io/smartjourney-smarttourismproject/ai-backend:<commit-sha>`, built by this repo's CI on every push to `main` |
 | Reachable from | **Only NestJS**, over the server's internal Docker network (`http://ai-backend:8000`). It has **no public URL and no Caddy route**; it's unauthenticated by design. |
 | Config | The shared `/opt/smartjourney/.env` on the server (written by hand, see below) |
