@@ -26,6 +26,7 @@ class TripState(BaseModel):
     followup_scope: Optional[str] = None   # "full" | "shape_only" | None (not a follow-up)
     followup_target_days: Optional[List[int]] = None   # None = every day
     followup_cheaper: bool = False
+    followup_density_delta: int = 0   # stops +/- per targeted day, vs. that day's current count
     followup_info: str = "budget"   # "budget" | "weather" - what an informational follow-up asks about
 
     # Trip details

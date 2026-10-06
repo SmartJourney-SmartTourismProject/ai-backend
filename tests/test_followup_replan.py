@@ -284,3 +284,55 @@ async def test_a_second_fewer_follow_up_compounds_not_resets(monkeypatch):
     for day in state.itinerary:
         attraction_count = len([i for i in day["items"] if i["type"] == "attraction"])
         assert attraction_count == 1
+
+
+# ---- "make day 2 more relaxed" (live-found: came back unchanged) ---------
+
+def _attraction_count(day: dict) -> int:
+    return len([i for i in day["items"] if i["type"] == "attraction"])
+
+
+async def _relax_day_2(monkeypatch, extracted: ExtractedSlots, **state_overrides) -> TripState:
+    _patch_search(monkeypatch, attractions=_many_attractions(10, prefix="new"))
+    state = TripState(
+        user_input="make day 2 more relaxed", destination="Kandy", duration_days=3,
+        is_followup=True, followup_scope="shape_only",
+        trip_context={"destination_name": "Kandy", "district_id": "d1", "lat": 7.29, "lon": 80.63},
+        itinerary=[_three_item_day(1, "2026-10-01"), _three_item_day(2, "2026-10-02"),
+                   _three_item_day(3, "2026-10-03")],
+        **state_overrides,
+    )
+    _patch_fill_slots_llm(monkeypatch, extracted)
+    state = await fill_slots(state)
+    return state
+
+
+async def test_relaxed_day_2_drops_a_stop_when_the_model_extracts_nothing(monkeypatch):
+    state = await _relax_day_2(monkeypatch, ExtractedSlots())
+    original_day1, original_day3 = dict(state.itinerary[0]), dict(state.itinerary[2])
+
+    await rebuild_targeted_days(state)
+
+    assert _attraction_count(state.itinerary[1]) == 2   # was 3
+    assert state.itinerary[0] == original_day1
+    assert state.itinerary[2] == original_day3
+
+
+async def test_relaxed_day_2_on_an_already_relaxed_trip_still_changes_day_2(monkeypatch):
+    # pace="relaxed" both carried and extracted: the old full re-plan
+    # rebuilt the same plan. Day 2 must still get lighter, and the trip-wide
+    # pace / items_per_day must stay as they were.
+    state = await _relax_day_2(monkeypatch, ExtractedSlots(pace="relaxed"), pace="relaxed")
+    assert state.followup_scope == "shape_only"
+
+    await rebuild_targeted_days(state)
+
+    assert _attraction_count(state.itinerary[1]) == 2
+    assert state.pace == "relaxed"
+    assert state.items_per_day is None
+
+
+async def test_relaxed_day_2_does_not_become_the_whole_trips_pace(monkeypatch):
+    state = await _relax_day_2(monkeypatch, ExtractedSlots(pace="relaxed"), pace="balanced")
+    assert state.pace == "balanced"
+    assert state.items_per_day is None

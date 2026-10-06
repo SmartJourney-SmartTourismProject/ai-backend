@@ -81,6 +81,11 @@ async def fill_slots(state: TripState) -> TripState:
             state.followup_target_days = plan.target_days
             state.followup_cheaper = plan.cheaper
             state.followup_info = plan.info_kind
+            # A day-scoped density change ("make day 2 more relaxed") stays on
+            # those days: it must not become the whole trip's pace, or the next
+            # full re-plan would thin out every other day too.
+            day_scoped_density = bool(plan.target_days and plan.density_delta)
+            state.followup_density_delta = plan.density_delta if day_scoped_density else 0
 
             if result.destination:
                 state.destination = result.destination
@@ -96,7 +101,7 @@ async def fill_slots(state: TripState) -> TripState:
                 state.must_avoid = result.must_avoid
             if result.exclude_categories:
                 state.exclude_categories = result.exclude_categories
-            if result.pace:
+            if result.pace and not day_scoped_density:
                 state.pace = result.pace
             # Part 3: an absolute count always wins outright; a comparative
             # delta is resolved against whatever items_per_day would
@@ -109,9 +114,12 @@ async def fill_slots(state: TripState) -> TripState:
             # else (destination, dates) must not silently drop this.
             if result.items_per_day:
                 state.items_per_day = result.items_per_day
-            elif result.items_per_day_delta:
+            elif day_scoped_density:
+                pass   # applied per day by followup_replan.py
+            elif result.items_per_day_delta or plan.density_delta:
                 current = resolve_items_per_day(state)
-                state.items_per_day = max(1, min(8, current + result.items_per_day_delta))
+                delta = result.items_per_day_delta or plan.density_delta
+                state.items_per_day = max(1, min(8, current + delta))
         else:
             if state.destination is None and result.destination:
                 state.destination = result.destination

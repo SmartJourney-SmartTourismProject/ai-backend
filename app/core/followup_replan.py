@@ -229,10 +229,17 @@ async def rebuild_targeted_days(state: TripState) -> TripState:
         tail = [a for a in ranked_attractions if a["id"] not in used_attraction_ids and a["id"] not in cluster_ids]
         fresh_attractions = cluster + tail
         fresh_restaurants = [r for r in ranked_restaurants if r["id"] not in used_restaurant_ids]
+        # "Make day 2 more relaxed": one stop fewer than day 2 has NOW, not
+        # than the trip-wide pace says - a day already at that pace would
+        # otherwise be rebuilt at the same count and come back identical.
+        day_items_target = items_target
+        if state.followup_density_delta:
+            current = len([i for i in day.get("items", []) if i.get("type") == "attraction"])
+            day_items_target = max(1, min(8, (current or items_target) + state.followup_density_delta))
         constraints = DayConstraints.for_day(
             day_num=day_num,
             total_days=last_day_num,
-            items_target=items_target,
+            items_target=day_items_target,
             has_hotels=bool(ranked_hotels),
             wants_restaurants=wants_restaurants,
             prefer_price_level_max=price_ceiling,

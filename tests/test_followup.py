@@ -67,3 +67,44 @@ def test_cheaper_without_a_day_number_targets_every_day():
     assert plan.scope == "shape_only"
     assert plan.target_days is None
     assert plan.cheaper is True
+
+
+# ---- "make day 2 more relaxed": a pace word scoped to named days ---------
+
+def test_relaxed_with_a_day_number_is_a_targeted_lighter_day():
+    plan = classify_followup("make day 2 more relaxed", _slots())
+    assert plan.scope == "shape_only"
+    assert plan.target_days == [2]
+    assert plan.density_delta == -1
+
+
+def test_extracted_relaxed_pace_with_a_day_number_stays_targeted_not_full():
+    # The model reading "relaxed" as pace used to force a full re-plan of
+    # every day - which, on a trip already relaxed, rebuilt the same plan.
+    plan = classify_followup("make day 2 more relaxed", _slots(pace="relaxed"))
+    assert plan.scope == "shape_only"
+    assert plan.target_days == [2]
+    assert plan.density_delta == -1
+
+
+def test_busier_with_a_day_number_adds_a_stop():
+    plan = classify_followup("can day 3 have more places", _slots())
+    assert plan.target_days == [3]
+    assert plan.density_delta == 1
+
+
+def test_extracted_pace_without_a_day_number_still_replans_in_full():
+    plan = classify_followup("make the whole trip more relaxed", _slots(pace="relaxed"))
+    assert plan.scope == "full"
+
+
+def test_relaxed_phrase_with_no_day_and_no_extraction_is_a_trip_wide_delta():
+    plan = classify_followup("make it more relaxed", _slots())
+    assert plan.scope == "shape_only"
+    assert plan.target_days is None
+    assert plan.density_delta == -1
+
+
+def test_extracted_delta_without_a_day_is_not_counted_twice():
+    plan = classify_followup("fewer places please", _slots(items_per_day_delta=-1))
+    assert plan.density_delta == 0   # slot_filling applies the extracted delta itself
